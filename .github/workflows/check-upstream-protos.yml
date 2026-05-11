@@ -1,0 +1,118 @@
+name: Check upstream tacticalapi
+
+# Weekly drift check against Rheinmetall/tacticalapi. The plugin pins the
+# upstream `.proto` files to a specific commit SHA (TacticalApiProtoSha in
+# the src .csproj) for reproducibility — without this, any upstream push
+# would silently change the bytes a `dotnet pack` produces from the same
+# Bowire-side commit. The trade-off is that we miss upstream fixes /
+# additions unless we deliberately bump.
+#
+# This workflow runs once a week, compares the pinned SHA against upstream
+# `main` HEAD, and posts (or updates) a single open issue labelled
+# `upstream-bump` summarising what's changed — with a special call-out
+# for changes to `.proto` files (the only thing that actually affects our
+# generated client). Pure docs/test/README changes upstream get an FYI
+# entry but don't escalate.
+
+on:
+  schedule:
+    - cron: '0 7 * * 1'  # Mondays, 07:00 UTC — early enough for a working-day inbox
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Compare pinned SHA against upstream HEAD
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UPSTREAM_REPO: Rheinmetall/tacticalapi
+          UPSTREAM_BRANCH: main
+          LABEL: upstream-bump
+        run: |
+          set -euo pipefail
+
+          # The pinned SHA lives in the src .csproj as
+          #   <TacticalApiProtoSha>HEX40</TacticalApiProtoSha>
+          # Be lenient about whitespace; only the 40-char hex matters.
+          PINNED=$(grep -oE '<TacticalApiProtoSha>[a-f0-9]{40}</TacticalApiProtoSha>' \
+            src/Kuestenlogik.Bowire.Protocol.TacticalApi/Kuestenlogik.Bowire.Protocol.TacticalApi.csproj \
+            | grep -oE '[a-f0-9]{40}' | head -1)
+
+          if [ -z "$PINNED" ]; then
+            echo "::error::Could not parse <TacticalApiProtoSha> from src .csproj"
+            exit 1
+          fi
+
+          HEAD=$(gh api "repos/$UPSTREAM_REPO/commits/$UPSTREAM_BRANCH" --jq .sha)
+          echo "pinned : $PINNED"
+          echo "head   : $HEAD"
+
+          if [ "$PINNED" = "$HEAD" ]; then
+            echo "Up to date — nothing to do."
+            # If there was a previously-open issue, close it.
+            EXISTING=$(gh issue list --label "$LABEL" --state open --json number --jq '.[0].number // empty')
+            if [ -n "$EXISTING" ]; then
+              gh issue close "$EXISTING" --comment "Upstream pin is now equal to upstream HEAD ($HEAD). Closing automatically."
+            fi
+            exit 0
+          fi
+
+          # Fetch the comparison. The .files[] entries each have status +
+          # filename. We split into proto-affecting vs other so the issue
+          # body can lead with the relevant section.
+          COMPARE=$(gh api "repos/$UPSTREAM_REPO/compare/$PINNED...$HEAD")
+          AHEAD=$(echo "$COMPARE" | jq -r '.ahead_by')
+          BEHIND=$(echo "$COMPARE" | jq -r '.behind_by')
+          PROTO_FILES=$(echo "$COMPARE" | jq -r '.files[]? | select(.filename | startswith("rheinmetall/tactical_api/")) | "- `" + .status + "` " + .filename')
+          OTHER_FILES=$(echo "$COMPARE" | jq -r '.files[]? | select(.filename | startswith("rheinmetall/tactical_api/") | not) | "- `" + .status + "` " + .filename')
+          COMPARE_URL="https://github.com/$UPSTREAM_REPO/compare/$PINNED...$HEAD"
+
+          # Issue title doubles as a dedupe key — same title means we
+          # update the existing open issue rather than spawning a new one.
+          TITLE="Upstream tacticalapi is $AHEAD commits ahead of pinned SHA"
+
+          {
+            echo "Upstream is **$AHEAD commits ahead** of the pinned SHA \`$PINNED\` (HEAD now \`$HEAD\`)."
+            echo ""
+            if [ -n "$PROTO_FILES" ]; then
+              echo "### \`.proto\` changes — these affect the generated client"
+              echo "$PROTO_FILES"
+              echo ""
+            else
+              echo "_No \`.proto\` file changes — upstream drift is docs / metadata / test client only._"
+              echo ""
+            fi
+            if [ -n "$OTHER_FILES" ]; then
+              echo "<details><summary>Other changes ($(echo "$OTHER_FILES" | wc -l) files)</summary>"
+              echo ""
+              echo "$OTHER_FILES"
+              echo ""
+              echo "</details>"
+              echo ""
+            fi
+            echo "### Bump procedure"
+            echo "1. Verify upstream changes don't break our \`BowireTacticalApiProtocol\` / descriptor lookup."
+            echo "2. Update \`<TacticalApiProtoSha>\` in \`src/.../Kuestenlogik.Bowire.Protocol.TacticalApi.csproj\` to \`$HEAD\`."
+            echo "3. \`dotnet pack -c Release\` locally to verify the new \`.proto\` files compile."
+            echo "4. Bump the plugin's own version, tag, push."
+            echo ""
+            echo "Full diff: $COMPARE_URL"
+          } > body.md
+
+          EXISTING=$(gh issue list --label "$LABEL" --state open --search "$TITLE in:title" --json number --jq '.[0].number // empty')
+          if [ -n "$EXISTING" ]; then
+            echo "Updating existing issue #$EXISTING"
+            gh issue edit "$EXISTING" --body-file body.md
+          else
+            echo "Creating new issue"
+            # The label may not exist yet — create it idempotently before opening.
+            gh label create "$LABEL" --color BFD4F2 --description "Upstream proto pin drifted; review and bump" 2>/dev/null || true
+            gh issue create --title "$TITLE" --body-file body.md --label "$LABEL"
+          fi
