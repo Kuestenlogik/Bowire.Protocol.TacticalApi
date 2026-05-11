@@ -1,0 +1,28 @@
+<Project>
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Bowire contract package — IBowireProtocol + the model
+         types used by DiscoverAsync / InvokeAsync return values. -->
+    <PackageVersion Include="Kuestenlogik.Bowire" Version="1.1.0" />
+
+    <!-- gRPC client + protoc tooling. Grpc.Tools generates the
+         C# bindings from the .proto files that the build target
+         downloads into obj/tacticalapi-protos/. Google.Protobuf
+         is the runtime serializer the generated code calls into. -->
+    <PackageVersion Include="Grpc.Net.Client" Version="2.71.0" />
+    <PackageVersion Include="Grpc.Tools" Version="2.71.0" />
+    <PackageVersion Include="Google.Protobuf" Version="3.29.3" />
+
+    <!-- Test-only -->
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.5.1" />
+    <PackageVersion Include="xunit.v3" Version="3.2.2" />
+    <PackageVersion Include="xunit.runner.visualstudio" Version="3.1.5" />
+    <!-- XPlat coverage collector — drives the dotnet test coverage
+         collection flag and drops one cobertura.xml per test project
+         for CI / Codecov upload. -->
+    <PackageVersion Include="coverlet.collector" Version="6.0.4" />
+    <PackageVersion Include="Microsoft.SourceLink.GitHub" Version="10.0.203" />
+  </ItemGroup>
+</Project>
