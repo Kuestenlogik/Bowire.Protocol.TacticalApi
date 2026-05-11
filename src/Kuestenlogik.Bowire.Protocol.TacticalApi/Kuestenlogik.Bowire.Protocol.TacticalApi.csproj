@@ -1,0 +1,100 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>Bowire protocol plugin for Rheinmetall's TacticalAPI — a gRPC interface for situational-awareness systems. Bundles the upstream service schema so users get typed discovery and invoke against any TacticalAPI server, even when gRPC Server Reflection is disabled. The TacticalAPI .proto files (EPL-2.0) are downloaded at build time from the upstream repository and never redistributed by this Apache-2.0 package — only the generated C# bindings ship.</Description>
+    <PackageId>Kuestenlogik.Bowire.Protocol.TacticalApi</PackageId>
+    <PackageTags>bowire;bowire-plugin;tacticalapi;grpc;rheinmetall;situational-awareness;developer-tools</PackageTags>
+    <IsPackable>true</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Kuestenlogik.Bowire" />
+    <PackageReference Include="Grpc.Net.Client" />
+    <PackageReference Include="Google.Protobuf" />
+    <PackageReference Include="Grpc.Tools">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <!--
+    ============================================================================
+    Build-time TacticalAPI proto fetch
+    ============================================================================
+    The upstream .proto files at github.com/Rheinmetall/tacticalapi are licensed
+    EPL-2.0 OR BSD-3-Clause. Vendoring them into this Apache-2.0 repository
+    would amount to redistribution under a different license, which the EPL
+    does not permit without preserving its own terms.
+
+    Workaround: download them on every build into the project's intermediate
+    output directory (gitignored via the standard obj/ ignore), let Grpc.Tools
+    compile them into the assembly, and ship only the generated C# bindings.
+    The bindings are derivative of the .proto schema but the .proto source
+    itself never lands in our source tree or our NuGet package.
+
+    Pinned commit: e68546809d981cd649325dba4a9702c1a77a1a0b — the upstream
+    initial commit. TODO: bump to a released tag once Rheinmetall cuts one.
+  -->
+  <PropertyGroup>
+    <TacticalApiProtoSha>e68546809d981cd649325dba4a9702c1a77a1a0b</TacticalApiProtoSha>
+    <TacticalApiProtoBaseUrl>https://raw.githubusercontent.com/Rheinmetall/tacticalapi/$(TacticalApiProtoSha)/rheinmetall/tactical_api/v0</TacticalApiProtoBaseUrl>
+    <!--
+      The .proto files reference each other with their full path
+      ('rheinmetall/tactical_api/v0/types.proto', etc.), so they have to
+      live under that same directory structure relative to ProtoRoot for
+      protoc's import resolution to succeed.
+    -->
+    <TacticalApiProtoRoot>$(IntermediateOutputPath)tacticalapi-protos\</TacticalApiProtoRoot>
+    <TacticalApiProtoDir>$(TacticalApiProtoRoot)rheinmetall\tactical_api\v0\</TacticalApiProtoDir>
+  </PropertyGroup>
+
+  <!--
+    Runs before Grpc.Tools' Protobuf_Compile target (which itself hooks
+    BeforeTargets="BeforeCompile"). PrepareForBuild is the earliest standard
+    target that runs once per build, well before any Protobuf items are
+    resolved. SkipUnchangedFiles makes incremental builds skip the network.
+  -->
+  <Target Name="DownloadTacticalApiProtos"
+          BeforeTargets="PrepareForBuild;Protobuf_Compile"
+          Inputs="$(MSBuildThisFileFullPath)"
+          Outputs="$(TacticalApiProtoDir).fetch-stamp">
+    <MakeDir Directories="$(TacticalApiProtoDir)" />
+
+    <ItemGroup>
+      <_TacticalApiProtoFile Include="service_types.proto" />
+      <_TacticalApiProtoFile Include="situation_object_locations.proto" />
+      <_TacticalApiProtoFile Include="situation_object_types.proto" />
+      <_TacticalApiProtoFile Include="situation_object_updates.proto" />
+      <_TacticalApiProtoFile Include="situation_service.proto" />
+      <_TacticalApiProtoFile Include="types.proto" />
+    </ItemGroup>
+
+    <Message Importance="high"
+             Text="Fetching TacticalAPI .proto files from $(TacticalApiProtoBaseUrl)" />
+
+    <DownloadFile SourceUrl="$(TacticalApiProtoBaseUrl)/%(_TacticalApiProtoFile.Identity)"
+                  DestinationFolder="$(TacticalApiProtoDir)"
+                  SkipUnchangedFiles="true" />
+
+    <Touch Files="$(TacticalApiProtoDir).fetch-stamp" AlwaysCreate="true" />
+  </Target>
+
+  <!--
+    Add the downloaded .proto files as Protobuf items DYNAMICALLY: at
+    project-evaluation time they don't exist yet, so a static <ItemGroup>
+    glob wouldn't pick them up on a clean build. Hook into Protobuf_Compile
+    via DependsOnTargets so the item group lands before protoc reads it.
+  -->
+  <Target Name="AddTacticalApiProtobufItems"
+          AfterTargets="DownloadTacticalApiProtos"
+          BeforeTargets="Protobuf_Compile">
+    <ItemGroup>
+      <Protobuf Include="$(TacticalApiProtoDir)*.proto"
+                ProtoRoot="$(TacticalApiProtoRoot)"
+                GrpcServices="Client"
+                Access="Public"
+                CompileOutputs="true" />
+    </ItemGroup>
+  </Target>
+
+</Project>
