@@ -200,6 +200,21 @@ public sealed class BowireTacticalApiProtocol : IBowireProtocol
             Metadata: new Dictionary<string, string>(StringComparer.Ordinal));
 
     /// <inheritdoc />
+    /// <remarks>
+    /// Server-streaming twin of <see cref="InvokeAsync"/>: same descriptor-
+    /// resolution / Method&lt;byte[],byte[]&gt; / JsonParser-and-Formatter
+    /// pipeline, but the byte stream rides through
+    /// <see cref="CallInvoker.AsyncServerStreamingCall{TRequest,TResponse}(Method{TRequest,TResponse}, string, CallOptions, TRequest)"/>
+    /// and each emitted frame is yielded as a JSON string.
+    /// <para>
+    /// Client- and duplex-streaming still return the "wrong-method-shape"
+    /// hint via <see cref="InvokeAsync"/> — TacticalAPI's only streaming
+    /// RPC today is server-streaming (SubscribeSituationObjectEvents), and
+    /// nothing on the upstream .proto roadmap suggests that's about to
+    /// change. The shape-checks live on the unary entry point so the
+    /// streaming entry point can stay narrow.
+    /// </para>
+    /// </remarks>
     public async IAsyncEnumerable<string> InvokeStreamAsync(
         string serverUrl, string service, string method,
         List<string> jsonMessages, bool showInternalServices,
@@ -208,13 +223,56 @@ public sealed class BowireTacticalApiProtocol : IBowireProtocol
     {
         ArgumentException.ThrowIfNullOrEmpty(serverUrl);
 
-        // Channel-construct sanity: catches mis-typed serverUrl early so
-        // the caller gets a meaningful error rather than a silent empty
-        // stream. The channel is disposed immediately because v0.1.0
-        // doesn't wire the stream through yet — see InvokeAsync.
+        if (!TryResolveMethod(service, method, out var serviceDesc, out var methodDesc, out var resolveError))
+        {
+            yield return $$"""{ "error": {{System.Text.Json.JsonSerializer.Serialize(resolveError)}} }""";
+            yield break;
+        }
+        if (!methodDesc!.IsServerStreaming || methodDesc.IsClientStreaming)
+        {
+            yield return """{ "error": "Use the unary endpoint — client / duplex streaming aren't part of the TacticalAPI surface in 0.x." }""";
+            yield break;
+        }
+
+        var requestJson = jsonMessages.FirstOrDefault() ?? "{}";
+        IMessage requestMessage;
+        string? parseError = null;
+        try
+        {
+            requestMessage = JsonParser.Default.Parse(requestJson, methodDesc.InputType);
+        }
+        catch (InvalidProtocolBufferException ex)
+        {
+            requestMessage = methodDesc.InputType.Parser.ParseFrom([]);
+            parseError = $"Request JSON does not match {methodDesc.InputType.FullName}: {ex.Message}";
+        }
+        if (parseError is not null)
+        {
+            yield return $$"""{ "error": {{System.Text.Json.JsonSerializer.Serialize(parseError)}} }""";
+            yield break;
+        }
+
+        var grpcMethod = new Method<byte[], byte[]>(
+            type: MethodType.ServerStreaming,
+            serviceName: serviceDesc!.FullName,
+            name: methodDesc.Name,
+            requestMarshaller: Marshallers.Create(static d => d, static d => d),
+            responseMarshaller: Marshallers.Create(static d => d, static d => d));
+
+        var requestBytes = requestMessage.ToByteArray();
+        var headers = BuildMetadata(metadata);
+        var callOptions = new CallOptions(headers: headers, cancellationToken: ct);
+
         using var channel = GrpcChannel.ForAddress(serverUrl);
-        await Task.CompletedTask.ConfigureAwait(false);
-        yield return """{ "info": "TacticalAPI streaming not yet implemented in 0.1.0." }""";
+        using var call = channel.CreateCallInvoker()
+            .AsyncServerStreamingCall(grpcMethod, host: null, options: callOptions, request: requestBytes);
+
+        while (await call.ResponseStream.MoveNext(ct).ConfigureAwait(false))
+        {
+            var responseBytes = call.ResponseStream.Current;
+            var responseMessage = methodDesc.OutputType.Parser.ParseFrom(responseBytes);
+            yield return JsonFormatter.Default.Format(responseMessage);
+        }
     }
 
     /// <inheritdoc />
