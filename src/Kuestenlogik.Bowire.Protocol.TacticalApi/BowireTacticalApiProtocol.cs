@@ -1,10 +1,14 @@
 // Copyright 2026 Küstenlogik
 // SPDX-License-Identifier: Apache-2.0
 
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
+using Google.Protobuf;
 using Google.Protobuf.Reflection;
+using Grpc.Core;
 using Grpc.Net.Client;
 using Kuestenlogik.Bowire.Models;
+using Rheinmetall.TacticalApi.V0;
 
 namespace Kuestenlogik.Bowire.Protocol.TacticalApi;
 
@@ -57,6 +61,23 @@ public sealed class BowireTacticalApiProtocol : IBowireProtocol
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// Unary path uses the bundled <see cref="SituationServiceReflection.Descriptor"/>
+    /// to resolve the (service, method) tuple, parses the request JSON into a
+    /// typed <see cref="IMessage"/> via the descriptor's parser, serializes to
+    /// the protobuf wire format, dispatches over <see cref="CallInvoker"/> with
+    /// a passthrough <see cref="Method{TRequest,TResponse}"/> (same pattern as
+    /// Bowire's core gRPC plugin so the wire bytes also land in
+    /// <see cref="InvokeResult.ResponseBinary"/> for mock-server replay), then
+    /// decodes the response bytes back through the descriptor's parser and
+    /// formats them with <see cref="JsonFormatter.Default"/>.
+    ///
+    /// <para>
+    /// Client / server / duplex streaming still falls through to <see cref="InvokeStreamAsync"/>
+    /// (0.2.0 work) — for those a streaming-call <c>CallInvoker</c> is needed
+    /// and the result shape changes from "one response" to "stream of responses".
+    /// </para>
+    /// </remarks>
     public async Task<InvokeResult> InvokeAsync(
         string serverUrl, string service, string method,
         List<string> jsonMessages, bool showInternalServices,
@@ -64,21 +85,119 @@ public sealed class BowireTacticalApiProtocol : IBowireProtocol
     {
         ArgumentException.ThrowIfNullOrEmpty(serverUrl);
 
-        // v0.1.0 placeholder — the typed-invoke pipeline reuses the same
-        // Google.Protobuf descriptor walking that the core gRPC plugin
-        // does, but threading it through Grpc.Net.Client.CallInvoker for
-        // every method shape (unary vs server-streaming) is more code
-        // than 0.1.0 needs to prove the discovery + schema bundling
-        // story. Until then, callers that need invocation can use the
-        // core gRPC plugin against the same endpoint with the bundled
-        // descriptor uploaded.
-        await Task.CompletedTask.ConfigureAwait(false);
-        return new InvokeResult(
-            Response: $$"""{ "info": "TacticalAPI invoke not yet implemented in 0.1.0 — use the core gRPC plugin against {{serverUrl}} with the bundled schema for now." }""",
-            DurationMs: 0,
-            Status: "not-implemented",
-            Metadata: new Dictionary<string, string>(StringComparer.Ordinal));
+        if (!TryResolveMethod(service, method, out var serviceDesc, out var methodDesc, out var resolveError))
+            return ErrorResult(resolveError!, "not-found");
+
+        if (methodDesc!.IsClientStreaming || methodDesc.IsServerStreaming)
+            return ErrorResult(
+                "Use the streaming endpoint for client/server-streaming methods.",
+                "wrong-method-shape");
+
+        var requestJson = jsonMessages.FirstOrDefault() ?? "{}";
+        IMessage requestMessage;
+        try
+        {
+            requestMessage = JsonParser.Default.Parse(requestJson, methodDesc.InputType);
+        }
+        catch (InvalidProtocolBufferException ex)
+        {
+            return ErrorResult($"Request JSON does not match {methodDesc.InputType.FullName}: {ex.Message}", "bad-request");
+        }
+
+        var grpcMethod = new Method<byte[], byte[]>(
+            type: MethodType.Unary,
+            serviceName: serviceDesc!.FullName,
+            name: methodDesc.Name,
+            requestMarshaller: Marshallers.Create(static d => d, static d => d),
+            responseMarshaller: Marshallers.Create(static d => d, static d => d));
+
+        var requestBytes = requestMessage.ToByteArray();
+        var headers = BuildMetadata(metadata);
+        var callOptions = new CallOptions(headers: headers, cancellationToken: ct);
+
+        using var channel = GrpcChannel.ForAddress(serverUrl);
+        var invoker = channel.CreateCallInvoker();
+        var sw = Stopwatch.StartNew();
+        try
+        {
+            var responseBytes = await invoker
+                .AsyncUnaryCall(grpcMethod, host: null, options: callOptions, request: requestBytes)
+                .ConfigureAwait(false);
+            sw.Stop();
+
+            var responseMessage = methodDesc.OutputType.Parser.ParseFrom(responseBytes);
+            var responseJson = JsonFormatter.Default.Format(responseMessage);
+
+            return new InvokeResult(
+                Response: responseJson,
+                DurationMs: sw.ElapsedMilliseconds,
+                Status: "OK",
+                Metadata: new Dictionary<string, string>(StringComparer.Ordinal),
+                ResponseBinary: responseBytes);
+        }
+        catch (RpcException ex)
+        {
+            sw.Stop();
+            // Mirror the core gRPC plugin's trailer-namespacing so the
+            // mock-server replay path can tell trailers from headers.
+            var trailerMetadata = ex.Trailers.ToDictionary(
+                e => "_trailer:" + e.Key,
+                e => e.Value,
+                StringComparer.Ordinal);
+            return new InvokeResult(
+                Response: ex.Status.Detail,
+                DurationMs: sw.ElapsedMilliseconds,
+                Status: ex.StatusCode.ToString(),
+                Metadata: trailerMetadata);
+        }
     }
+
+    private static bool TryResolveMethod(
+        string service, string method,
+        out ServiceDescriptor? serviceDescriptor,
+        out MethodDescriptor? methodDescriptor,
+        out string? error)
+    {
+        var file = SituationServiceReflection.Descriptor;
+        serviceDescriptor = file.Services.FirstOrDefault(s =>
+            string.Equals(s.FullName, service, StringComparison.Ordinal) ||
+            string.Equals(s.Name, service, StringComparison.Ordinal));
+        if (serviceDescriptor is null)
+        {
+            methodDescriptor = null;
+            error = $"Service '{service}' is not part of the bundled TacticalAPI descriptors. " +
+                    $"Known: {string.Join(", ", file.Services.Select(s => s.FullName))}.";
+            return false;
+        }
+
+        methodDescriptor = serviceDescriptor.Methods.FirstOrDefault(m =>
+            string.Equals(m.Name, method, StringComparison.Ordinal));
+        if (methodDescriptor is null)
+        {
+            error = $"Method '{method}' not declared on '{serviceDescriptor.FullName}'. " +
+                    $"Known: {string.Join(", ", serviceDescriptor.Methods.Select(m => m.Name))}.";
+            return false;
+        }
+
+        error = null;
+        return true;
+    }
+
+    private static Metadata BuildMetadata(Dictionary<string, string>? source)
+    {
+        var headers = new Metadata();
+        if (source is null) return headers;
+        foreach (var (key, value) in source)
+            headers.Add(key, value);
+        return headers;
+    }
+
+    private static InvokeResult ErrorResult(string message, string status) =>
+        new(
+            Response: message,
+            DurationMs: 0,
+            Status: status,
+            Metadata: new Dictionary<string, string>(StringComparer.Ordinal));
 
     /// <inheritdoc />
     public async IAsyncEnumerable<string> InvokeStreamAsync(
