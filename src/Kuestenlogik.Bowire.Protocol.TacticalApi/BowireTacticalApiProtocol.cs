@@ -99,7 +99,10 @@ public sealed class BowireTacticalApiProtocol : IBowireProtocol
         {
             requestMessage = JsonParser.Default.Parse(requestJson, methodDesc.InputType);
         }
-        catch (InvalidProtocolBufferException ex)
+        // Google.Protobuf raises InvalidJsonException for syntax errors
+        // and InvalidProtocolBufferException for shape mismatches; their
+        // inheritance was de-coupled in a recent release so catch both.
+        catch (Exception ex) when (ex is InvalidProtocolBufferException or InvalidJsonException)
         {
             return ErrorResult($"Request JSON does not match {methodDesc.InputType.FullName}: {ex.Message}", "bad-request");
         }
@@ -115,7 +118,9 @@ public sealed class BowireTacticalApiProtocol : IBowireProtocol
         var headers = BuildMetadata(metadata);
         var callOptions = new CallOptions(headers: headers, cancellationToken: ct);
 
-        using var channel = GrpcChannel.ForAddress(serverUrl);
+        var address = GrpcTransport.ResolveGrpcAddress(serverUrl);
+        var channelOptions = GrpcTransport.BuildChannelOptions(metadata);
+        using var channel = GrpcChannel.ForAddress(address, channelOptions);
         var invoker = channel.CreateCallInvoker();
         var sw = Stopwatch.StartNew();
         try
@@ -188,7 +193,15 @@ public sealed class BowireTacticalApiProtocol : IBowireProtocol
         var headers = new Metadata();
         if (source is null) return headers;
         foreach (var (key, value) in source)
+        {
+            // _bowire:* keys configure the transport (TLS skip-validation,
+            // client-cert path) and must never reach the wire — sending
+            // them as gRPC headers would leak configuration intent to the
+            // server.
+            if (GrpcTransport.IsTransportKey(key))
+                continue;
             headers.Add(key, value);
+        }
         return headers;
     }
 
@@ -241,7 +254,9 @@ public sealed class BowireTacticalApiProtocol : IBowireProtocol
         {
             requestMessage = JsonParser.Default.Parse(requestJson, methodDesc.InputType);
         }
-        catch (InvalidProtocolBufferException ex)
+        // See InvokeAsync — InvalidJsonException + InvalidProtocolBufferException
+        // are no longer a single hierarchy in current Google.Protobuf.
+        catch (Exception ex) when (ex is InvalidProtocolBufferException or InvalidJsonException)
         {
             requestMessage = methodDesc.InputType.Parser.ParseFrom([]);
             parseError = $"Request JSON does not match {methodDesc.InputType.FullName}: {ex.Message}";
@@ -263,7 +278,9 @@ public sealed class BowireTacticalApiProtocol : IBowireProtocol
         var headers = BuildMetadata(metadata);
         var callOptions = new CallOptions(headers: headers, cancellationToken: ct);
 
-        using var channel = GrpcChannel.ForAddress(serverUrl);
+        var address = GrpcTransport.ResolveGrpcAddress(serverUrl);
+        var channelOptions = GrpcTransport.BuildChannelOptions(metadata);
+        using var channel = GrpcChannel.ForAddress(address, channelOptions);
         using var call = channel.CreateCallInvoker()
             .AsyncServerStreamingCall(grpcMethod, host: null, options: callOptions, request: requestBytes);
 
