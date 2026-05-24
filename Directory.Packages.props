@@ -13,7 +13,7 @@
          is the runtime serializer the generated code calls into. -->
     <PackageVersion Include="Grpc.Net.Client" Version="2.71.0" />
     <PackageVersion Include="Grpc.Tools" Version="2.71.0" />
-    <PackageVersion Include="Google.Protobuf" Version="3.29.3" />
+    <PackageVersion Include="Google.Protobuf" Version="3.35.0" />
 
     <!-- Test-only -->
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.5.1" />
