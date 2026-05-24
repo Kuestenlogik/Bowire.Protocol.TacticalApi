@@ -17,6 +17,13 @@
     </PackageReference>
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Test project sees internal helpers (GrpcTransport.*) so unit
+         tests don't have to use reflection or lift the helpers into
+         the public API. -->
+    <InternalsVisibleTo Include="Kuestenlogik.Bowire.Protocol.TacticalApi.Tests" />
+  </ItemGroup>
+
   <!--
     ============================================================================
     Build-time TacticalAPI proto fetch
