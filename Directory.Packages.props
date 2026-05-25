@@ -24,5 +24,16 @@
          for CI / Codecov upload. -->
     <PackageVersion Include="coverlet.collector" Version="10.0.1" />
     <PackageVersion Include="Microsoft.SourceLink.GitHub" Version="10.0.300" />
+
+    <!-- ASP.NET test host for the integration suite. The TacticalAPI
+         sample server isn't a redistributable container image — we'd
+         have to teach Testcontainers to build it on the fly, which is
+         CI fragility we don't want. Instead the integration tests
+         spin up an in-process Kestrel + Grpc server hosting an
+         equivalent SituationService stub, and the plugin client
+         dials it over a real HTTP/2 connection. Same end-to-end
+         shape, no Docker dependency. -->
+    <PackageVersion Include="Grpc.AspNetCore" Version="2.80.0" />
+    <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.0" />
   </ItemGroup>
 </Project>
