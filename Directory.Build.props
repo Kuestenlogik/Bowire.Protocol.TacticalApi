@@ -58,9 +58,16 @@
   <PropertyGroup>
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
     <EmbedUntrackedSources>true</EmbedUntrackedSources>
-    <DebugType>portable</DebugType>
-    <IncludeSymbols>true</IncludeSymbols>
-    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <!-- Embed debug info directly in the assembly so SourceLink works
+         without a separate .snupkg. The split (DebugType=portable +
+         IncludeSymbols + snupkg) consistently fails nuget.org's
+         symbol-package validation because Grpc.Tools generates PDBs
+         for tool components (grpc_csharp_plugin) that the snupkg picks
+         up but the .nupkg correctly excludes. Embedded sidesteps the
+         whole matching problem and keeps step-through debugging
+         working everywhere SourceLink is consumed. -->
+    <DebugType>embedded</DebugType>
+    <IncludeSymbols>false</IncludeSymbols>
   </PropertyGroup>
 
   <ItemGroup Condition="'$(IsPackable)' != 'false'">
