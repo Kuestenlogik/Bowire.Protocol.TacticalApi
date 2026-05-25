@@ -86,4 +86,31 @@ internal static class TacticalApiDescriptors
             (true, true) => "DuplexStreaming",
         };
     }
+
+    /// <summary>
+    /// Resolve a (service, method) tuple against the bundled descriptors.
+    /// Returns <c>false</c> when either side doesn't match. Shared
+    /// between BowireTacticalApiProtocol's Invoke / InvokeStream paths
+    /// and the TacticalApiMockEmitter so all three speak the same
+    /// resolution logic.
+    /// </summary>
+    public static bool TryResolve(
+        string service, string method,
+        out ServiceDescriptor? serviceDescriptor,
+        out MethodDescriptor? methodDescriptor)
+    {
+        var file = SituationServiceReflection.Descriptor;
+        serviceDescriptor = file.Services.FirstOrDefault(s =>
+            string.Equals(s.FullName, service, StringComparison.Ordinal) ||
+            string.Equals(s.Name, service, StringComparison.Ordinal));
+        if (serviceDescriptor is null)
+        {
+            methodDescriptor = null;
+            return false;
+        }
+
+        methodDescriptor = serviceDescriptor.Methods.FirstOrDefault(m =>
+            string.Equals(m.Name, method, StringComparison.Ordinal));
+        return methodDescriptor is not null;
+    }
 }
