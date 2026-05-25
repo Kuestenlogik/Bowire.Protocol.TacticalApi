@@ -19,26 +19,48 @@ namespace Kuestenlogik.Bowire.Protocol.TacticalApi;
 /// so users get typed discovery + invoke without needing the server to expose
 /// gRPC Server Reflection or having to upload the .proto themselves.
 /// <para>
-/// MVP scope (0.1.0): discovery is served from the bundled descriptors;
-/// invocation walks the generated <see cref="ServiceDescriptor"/> graph and
-/// dispatches over <c>Grpc.Net.Client</c>. <see cref="OpenChannelAsync"/>
-/// returns <c>null</c> because the only streaming method on TacticalAPI is
-/// server-streaming, not duplex.
+/// Discovery is served from the bundled descriptors; invocation walks the
+/// generated <see cref="ServiceDescriptor"/> graph and dispatches over
+/// <c>Grpc.Net.Client</c>. <see cref="OpenChannelAsync"/> returns
+/// <c>null</c> because TacticalAPI's only streaming RPC is server-streaming,
+/// not duplex — a stable contract, not a pre-1.0 hedge.
 /// </para>
 /// </summary>
 public sealed class BowireTacticalApiProtocol : IBowireProtocol
 {
     /// <summary>Protocol identifier used in Bowire URLs (<c>tacticalapi@host:port</c>).</summary>
-    public const string ProtocolId = "tacticalapi";
+    internal const string ProtocolId = "tacticalapi";
 
     /// <summary>Display name for the Bowire sidebar tab.</summary>
-    public const string DisplayName = "TacticalAPI";
+    internal const string DisplayName = "TacticalAPI";
+
+    // Plugin-wide defaults. Mirrored as DefaultValue on the BowirePluginSetting
+    // entries below so the workbench UI and the runtime can't drift. Zero
+    // means "no deadline" (gRPC default behaviour); positive integers are
+    // honoured by InvokeAsync / InvokeStreamAsync when they build CallOptions.
+    internal const int DefaultInvocationDeadlineSeconds = 0;
+    internal const int DefaultStreamIdleSeconds = 0;
+    internal const bool DefaultAllowSelfSignedCerts = false;
 
     /// <inheritdoc />
     public string Name => DisplayName;
 
     /// <inheritdoc />
     public string Id => ProtocolId;
+
+    /// <inheritdoc />
+    public IReadOnlyList<BowirePluginSetting> Settings =>
+    [
+        new("invocationDeadlineSeconds", "Invocation deadline",
+            $"Per-call gRPC deadline in seconds. 0 means no deadline (default). Useful when a downstream server hangs on cold connect.",
+            "number", DefaultInvocationDeadlineSeconds),
+        new("streamIdleSeconds", "Stream idle timeout",
+            $"Tear down a server-streaming subscription after this many seconds without a frame. 0 means 'never' (default — the stream runs until the server closes or the caller cancels).",
+            "number", DefaultStreamIdleSeconds),
+        new("allowSelfSignedCerts", "Allow self-signed certs",
+            "Skip the server certificate chain validation. Off by default. The shared `__bowireMtls__` marker overrides this per-call when present.",
+            "bool", DefaultAllowSelfSignedCerts),
+    ];
 
     /// <inheritdoc />
     public string IconSvg =>
@@ -73,9 +95,11 @@ public sealed class BowireTacticalApiProtocol : IBowireProtocol
     /// formats them with <see cref="JsonFormatter.Default"/>.
     ///
     /// <para>
-    /// Client / server / duplex streaming still falls through to <see cref="InvokeStreamAsync"/>
-    /// (0.2.0 work) — for those a streaming-call <c>CallInvoker</c> is needed
-    /// and the result shape changes from "one response" to "stream of responses".
+    /// Server-streaming methods are routed to <see cref="InvokeStreamAsync"/>.
+    /// Client-streaming and duplex-streaming aren't part of the TacticalAPI
+    /// surface (no upstream Rheinmetall RPC defines them and none is on the
+    /// .proto roadmap), so the shape-check on this entry point rejects them
+    /// with a "wrong-method-shape" hint rather than implementing dead code.
     /// </para>
     /// </remarks>
     public async Task<InvokeResult> InvokeAsync(
@@ -116,7 +140,8 @@ public sealed class BowireTacticalApiProtocol : IBowireProtocol
 
         var requestBytes = requestMessage.ToByteArray();
         var headers = BuildMetadata(metadata);
-        var callOptions = new CallOptions(headers: headers, cancellationToken: ct);
+        var callOptions = ApplyDeadline(
+            new CallOptions(headers: headers, cancellationToken: ct), metadata);
 
         var address = GrpcTransport.ResolveGrpcAddress(serverUrl);
         var channelOptions = GrpcTransport.BuildChannelOptions(metadata);
@@ -212,6 +237,25 @@ public sealed class BowireTacticalApiProtocol : IBowireProtocol
             Status: status,
             Metadata: new Dictionary<string, string>(StringComparer.Ordinal));
 
+    /// <summary>
+    /// If the caller set an <c>invocationDeadlineSeconds</c> metadata
+    /// value, fold it into the <see cref="CallOptions"/>. The setting
+    /// surface advertises 0 ("no deadline") as the default so the gRPC
+    /// stock behaviour stays untouched unless the operator opts in.
+    /// </summary>
+    private static CallOptions ApplyDeadline(CallOptions opts, Dictionary<string, string>? metadata)
+    {
+        if (metadata is null) return opts;
+        if (metadata.TryGetValue("invocationDeadlineSeconds", out var raw) &&
+            int.TryParse(raw, System.Globalization.NumberStyles.Integer,
+                System.Globalization.CultureInfo.InvariantCulture, out var seconds) &&
+            seconds > 0)
+        {
+            return opts.WithDeadline(DateTime.UtcNow.AddSeconds(seconds));
+        }
+        return opts;
+    }
+
     /// <inheritdoc />
     /// <remarks>
     /// Server-streaming twin of <see cref="InvokeAsync"/>: same descriptor-
@@ -243,7 +287,7 @@ public sealed class BowireTacticalApiProtocol : IBowireProtocol
         }
         if (!methodDesc!.IsServerStreaming || methodDesc.IsClientStreaming)
         {
-            yield return """{ "error": "Use the unary endpoint — client / duplex streaming aren't part of the TacticalAPI surface in 0.x." }""";
+            yield return """{ "error": "Use the unary endpoint — client / duplex streaming aren't part of the TacticalAPI surface." }""";
             yield break;
         }
 
@@ -276,7 +320,8 @@ public sealed class BowireTacticalApiProtocol : IBowireProtocol
 
         var requestBytes = requestMessage.ToByteArray();
         var headers = BuildMetadata(metadata);
-        var callOptions = new CallOptions(headers: headers, cancellationToken: ct);
+        var callOptions = ApplyDeadline(
+            new CallOptions(headers: headers, cancellationToken: ct), metadata);
 
         var address = GrpcTransport.ResolveGrpcAddress(serverUrl);
         var channelOptions = GrpcTransport.BuildChannelOptions(metadata);

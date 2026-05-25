@@ -11,7 +11,8 @@ Bowire protocol plugin for Rheinmetall's **[TacticalAPI](https://github.com/Rhei
 
 - **Bundled schema** — at build time the plugin downloads the upstream `.proto` files, compiles them with `Grpc.Tools`, and ships only the generated C# bindings. The Bowire sidebar can render the `Situation` service tree without uploading or hand-editing `.proto` files.
 - **Drop-in protocol tab** — once installed, Bowire shows a `TacticalAPI` tab next to gRPC / REST / SignalR. Connect via `bowire --url tacticalapi@<host:port>`.
-- **Server-streaming aware** — TacticalAPI's `SubscribeSituationObjectEvents` is server-streaming; the plugin surfaces it as a streaming method, not a unary call.
+- **Server-streaming aware** — TacticalAPI's `SubscribeSituationObjectEvents` is server-streaming; the plugin surfaces it as a streaming method, not a unary call. Client-streaming and duplex aren't part of the TacticalAPI surface (no upstream RPC defines them) and the plugin rejects callers that try.
+- **mTLS via the shared `__bowireMtls__` marker** — same auth profile that REST / gRPC / Kafka / AMQP read; PEM cert + key + optional CA + allow-self-signed. The legacy `_bowire:client-cert-pfx` / `_bowire:client-cert-password` / `_bowire:tls-skip-validation` keys stay supported for callers that pinned against the pre-1.0 vocabulary.
 
 ## Licensing — please read
 
@@ -53,11 +54,46 @@ dotnet build -c Release
 dotnet test  -c Release
 ```
 
-## Roadmap
+## Sample
 
-- **0.1.0 (this release)** — bundled-schema discovery, plugin registration, identity API, generated client stubs available to consumers.
-- **0.2.0** — typed unary invoke (`GetSituationObjects` / `AddOrUpdateSituationObjects` / `DeleteSituationObjects`) and server-streaming pump for `SubscribeSituationObjectEvents` via the generated client, JSON request/response envelopes matching the Bowire schema.
-- **0.3.0** — sample server + walkthrough, position-extractor adapter for the upcoming Bowire map widget so `SituationObjectLocation` updates land on the map automatically, authentication helpers (TLS + bearer-token metadata).
+A runnable sample lives in the central
+[`Bowire.Samples`](https://github.com/Kuestenlogik/Bowire.Samples) repo
+under
+[`src/Kuestenlogik.Bowire.Samples.TacticalApi`](https://github.com/Kuestenlogik/Bowire.Samples/tree/main/src/Kuestenlogik.Bowire.Samples.TacticalApi)
+— a self-contained mini gRPC server seeded with three MIL-2525C
+symbols (friendly / hostile / neutral surface contacts) so Bowire's
+TacticalAPI tab has live data to discover, invoke against, and
+subscribe to without a real Rheinmetall server in the lab.
+
+## Tests
+
+Unit tests run on every CI build (descriptor walk, JSON parser
+edge cases, mTLS-marker handling, URL normalisation). The
+integration suite under `tests/.../Integration` carries
+`[Trait("Category", "Docker")]` and spins up the
+Bowire.Samples.TacticalApi server in a container for end-to-end
+discovery + invoke + stream round-trips. CI runs both passes;
+local `dotnet test --filter "Category!=Docker"` skips the
+container side.
+
+## What's in 1.0
+
+- Bundled-schema discovery (no Server Reflection required on the target).
+- Unary invoke + server-streaming subscribe for the whole upstream `Situation` service.
+- Shared `__bowireMtls__` marker integration alongside the legacy `_bowire:` keys.
+- Plugin-tunable knobs: `invocationDeadlineSeconds`, `streamIdleSeconds`, `allowSelfSignedCerts`.
+- IBowireMockEmitter so recordings tagged `protocol: "tacticalapi"` replay through `bowire mock`.
+
+## Upstream proto pinning
+
+The bundled schema is fetched from a specific commit on
+[`Rheinmetall/tacticalapi`](https://github.com/Rheinmetall/tacticalapi)
+(see the `<TacticalApiCommit>` property in the csproj). Rheinmetall
+publishes commits but no release tags as of 2026-05; pinning to a
+commit-SHA is the only reproducible option. The weekly
+[`check-upstream-protos.yml`](.github/workflows/check-upstream-protos.yml)
+workflow watches the upstream `HEAD` and opens an issue when a new
+commit lands so the pin gets bumped deliberately rather than drifting.
 
 ## Acknowledgements
 

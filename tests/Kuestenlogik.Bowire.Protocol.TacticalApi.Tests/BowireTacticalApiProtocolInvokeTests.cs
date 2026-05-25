@@ -88,24 +88,34 @@ public sealed class BowireTacticalApiProtocolInvokeTests
         // the .Status field rather than throwing.
         var plugin = new BowireTacticalApiProtocol();
 
+        // Bound the connect attempt via the new invocationDeadlineSeconds
+        // setting so the failure surface stays in our hands: gRPC's
+        // exponential reconnect backoff can otherwise stretch a refused
+        // connection into a 30+ second wait that looks like a hang.
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-        cts.CancelAfter(TimeSpan.FromSeconds(5)); // safety net so the test never hangs CI
+        cts.CancelAfter(TimeSpan.FromSeconds(10)); // safety net for CI
 
         var result = await plugin.InvokeAsync(
             "tacticalapi@127.0.0.1:1", "Situation", "GetSituationObjects",
             jsonMessages: ["{}"], showInternalServices: false,
-            metadata: null, ct: cts.Token);
+            metadata: new Dictionary<string, string>
+            {
+                ["invocationDeadlineSeconds"] = "3",
+            },
+            ct: cts.Token);
 
-        // gRPC's failure for a connection-refused looks like Unavailable
-        // (mapped from the OS-level WSAECONNREFUSED / ECONNREFUSED).
-        // Don't pin to the exact string — older / newer Grpc.Net.Client
-        // versions sometimes report Cancelled or Internal — but the
-        // status must not be a normal-looking 'OK' or one of our
-        // pre-network sentinel strings.
-        Assert.NotEqual("OK", result.Status);
-        Assert.NotEqual("not-found", result.Status);
-        Assert.NotEqual("wrong-method-shape", result.Status);
-        Assert.NotEqual("bad-request", result.Status);
+        // gRPC's failure for a connection-refused maps to Unavailable;
+        // when the deadline trips first it surfaces as DeadlineExceeded.
+        // Both are valid here — what we pin is that the failure is
+        // visibly a gRPC-status failure, not silent 'OK' or one of our
+        // pre-network sentinel strings. Allowlist explicit so a future
+        // Grpc.Net.Client release that surfaces something else trips
+        // the test on purpose.
+        string[] expectedFailureStatuses =
+        [
+            "Unavailable", "DeadlineExceeded", "Cancelled", "Internal",
+        ];
+        Assert.Contains(result.Status, expectedFailureStatuses);
     }
 
     [Fact]

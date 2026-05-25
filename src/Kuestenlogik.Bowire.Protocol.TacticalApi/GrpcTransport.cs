@@ -4,6 +4,7 @@
 using System.Net.Http;
 using System.Security.Cryptography.X509Certificates;
 using Grpc.Net.Client;
+using Kuestenlogik.Bowire.Auth;
 
 namespace Kuestenlogik.Bowire.Protocol.TacticalApi;
 
@@ -25,10 +26,12 @@ namespace Kuestenlogik.Bowire.Protocol.TacticalApi;
 internal static class GrpcTransport
 {
     /// <summary>
-    /// Metadata keys the caller can set (workbench's auth-helper /
-    /// CLI <c>--metadata</c>) to influence TLS behaviour. The
+    /// Legacy metadata keys this plugin first shipped with. The
     /// <c>_bowire:</c> prefix marks them as Bowire-side configuration
-    /// instead of gRPC metadata that gets forwarded over the wire.
+    /// instead of gRPC metadata that gets forwarded over the wire. The
+    /// shared <c>__bowireMtls__</c> marker introduced for REST / gRPC /
+    /// Kafka / AMQP is now the preferred path; these stay supported
+    /// because pre-1.0 callers in the field pin against them.
     /// </summary>
     internal const string TlsSkipValidationKey = "_bowire:tls-skip-validation";
     internal const string ClientCertPfxPathKey = "_bowire:client-cert-pfx";
@@ -98,18 +101,43 @@ internal static class GrpcTransport
         var handler = new HttpClientHandler();
         var changed = false;
 
+        // Preferred path: the shared __bowireMtls__ marker (PEM-based,
+        // documented in Kuestenlogik.Bowire.Auth.MtlsConfig). Wins over
+        // the legacy _bowire:client-cert-pfx keys when both are present
+        // because every other Bowire plugin already speaks it — keeping
+        // a single auth vocabulary across the fleet means an mTLS
+        // session-profile set up in the workbench works on TacticalAPI
+        // the same way it works on REST / gRPC / Kafka / AMQP.
+        var sharedMtls = MtlsConfig.TryParseFromMetadata(metadata);
+        if (sharedMtls is not null)
+        {
+            var cert = X509Certificate2.CreateFromPem(
+                sharedMtls.CertificatePem, sharedMtls.PrivateKeyPem);
+            handler.ClientCertificates.Add(cert);
+            handler.ClientCertificateOptions = ClientCertificateOption.Manual;
+            if (sharedMtls.AllowSelfSigned)
+            {
+                handler.ServerCertificateCustomValidationCallback =
+                    HttpClientHandler.DangerousAcceptAnyServerCertificateValidator;
+            }
+            changed = true;
+        }
+
+        // Legacy: _bowire:tls-skip-validation. Still honoured so existing
+        // recorded sessions / saved auth profiles keep working — the
+        // shared marker's AllowSelfSigned property covers the same need.
         if (TryGetBool(metadata, TlsSkipValidationKey, out var skipValidation) && skipValidation)
         {
-            // Same mechanism Bowire's core gRPC plugin uses for staging
-            // / self-signed-cert targets — accept any chain, log nothing.
-            // The metadata key is the documented opt-in so it's never
-            // implicit; if it's set, the operator knew what they were doing.
             handler.ServerCertificateCustomValidationCallback =
                 HttpClientHandler.DangerousAcceptAnyServerCertificateValidator;
             changed = true;
         }
 
-        if (metadata.TryGetValue(ClientCertPfxPathKey, out var pfxPath) &&
+        // Legacy: _bowire:client-cert-pfx / _bowire:client-cert-password.
+        // Only consulted when the shared marker is absent so a workbench
+        // shipping both paths doesn't end up loading two certificates.
+        if (sharedMtls is null &&
+            metadata.TryGetValue(ClientCertPfxPathKey, out var pfxPath) &&
             !string.IsNullOrWhiteSpace(pfxPath))
         {
             metadata.TryGetValue(ClientCertPasswordKey, out var pfxPassword);
@@ -120,8 +148,6 @@ internal static class GrpcTransport
                 pfxPassword,
                 X509KeyStorageFlags.DefaultKeySet);
             handler.ClientCertificates.Add(cert);
-            // Manual selection so the runtime doesn't enumerate the
-            // platform store looking for a "better" candidate.
             handler.ClientCertificateOptions = ClientCertificateOption.Manual;
             changed = true;
         }
@@ -142,11 +168,13 @@ internal static class GrpcTransport
     /// <summary>
     /// Metadata keys consumed by this transport layer. The caller filters
     /// these out before forwarding the remainder as gRPC request metadata —
-    /// shipping <c>_bowire:tls-skip-validation</c> on the wire would leak
-    /// configuration intent to the server.
+    /// shipping <c>_bowire:tls-skip-validation</c> or
+    /// <c>__bowireMtls__</c> on the wire would leak configuration intent
+    /// (and credentials) to the server.
     /// </summary>
     public static bool IsTransportKey(string key) =>
-        key.StartsWith("_bowire:", StringComparison.Ordinal);
+        key.StartsWith("_bowire:", StringComparison.Ordinal)
+        || string.Equals(key, MtlsConfig.MtlsMarkerKey, StringComparison.Ordinal);
 
     private static bool TryGetBool(IReadOnlyDictionary<string, string> source, string key, out bool value)
     {
