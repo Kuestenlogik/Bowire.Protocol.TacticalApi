@@ -98,7 +98,7 @@
     <ItemGroup>
       <Protobuf Include="$(TacticalApiProtoDir)*.proto"
                 ProtoRoot="$(TacticalApiProtoRoot)"
-                GrpcServices="Client"
+                GrpcServices="Both"
                 Access="Public"
                 CompileOutputs="true" />
     </ItemGroup>
