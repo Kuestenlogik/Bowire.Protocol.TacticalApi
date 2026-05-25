@@ -43,12 +43,12 @@
          (release.yml: `-p:Version=${VERSION}`) and that always wins
          for the published nupkg. The "-dev" suffix on this default is
          deliberate: any artefact built outside the tag-driven release
-         pipeline carries it. Bumped to 0.2.0 here because the v0.2.0
-         milestone (typed CRUD + server-streaming pump) is the next
-         planned release per the README roadmap. -->
-    <Version>0.2.0-dev</Version>
-    <AssemblyVersion>0.2.0</AssemblyVersion>
-    <FileVersion>0.2.0</FileVersion>
+         pipeline carries it. Bumped to 1.0.0 here in lockstep with
+         the 1.0-prep audit closing out — the next release-candidate
+         tag is v1.0.0-rc.1. -->
+    <Version>1.0.0-dev</Version>
+    <AssemblyVersion>1.0.0</AssemblyVersion>
+    <FileVersion>1.0.0</FileVersion>
   </PropertyGroup>
 
   <PropertyGroup Condition="$(MSBuildProjectName.StartsWith('Kuestenlogik.Bowire.Protocol.'))">
