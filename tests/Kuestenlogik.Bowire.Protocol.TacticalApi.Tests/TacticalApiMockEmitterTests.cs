@@ -139,4 +139,80 @@ public sealed class TacticalApiMockEmitterTests
         var bytes = TacticalApiMockEmitter.DecodeRequestBytes(step, methodDesc!, NullLogger.Instance);
         Assert.Null(bytes);
     }
+
+    // -------- CanEmit edge cases --------
+
+    [Fact]
+    public async Task CanEmit_ProtocolCasingIsIgnored()
+    {
+        await using var emitter = new TacticalApiMockEmitter();
+        var rec = new BowireRecording
+        {
+            Steps = { new BowireRecordingStep { Protocol = "TacticalApi", ServerUrl = "grpc://localhost:5118" } },
+        };
+        Assert.True(emitter.CanEmit(rec));
+    }
+
+    [Fact]
+    public async Task CanEmit_NullRecording_Throws()
+    {
+        await using var emitter = new TacticalApiMockEmitter();
+        Assert.Throws<ArgumentNullException>(() => emitter.CanEmit(null!));
+    }
+
+    [Fact]
+    public async Task Id_pins_to_protocol_constant()
+    {
+        await using var emitter = new TacticalApiMockEmitter();
+        Assert.Equal(BowireTacticalApiProtocol.ProtocolId, emitter.Id);
+    }
+
+    // -------- StartAsync early-return paths --------
+
+    [Fact]
+    public async Task StartAsync_EmptyRecording_NoServerContact()
+    {
+        // No tacticalapi steps → StartAsync returns before opening a
+        // GrpcChannel. Pass: completes without throwing or hanging.
+        await using var emitter = new TacticalApiMockEmitter();
+        var rec = new BowireRecording { Steps = { new BowireRecordingStep { Protocol = "rest" } } };
+
+        await emitter.StartAsync(
+            rec, new MockEmitterOptions(), NullLogger.Instance, CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task StartAsync_NullRecording_Throws()
+    {
+        await using var emitter = new TacticalApiMockEmitter();
+        await Assert.ThrowsAsync<ArgumentNullException>(
+            () => emitter.StartAsync(null!, new MockEmitterOptions(), NullLogger.Instance, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task StartAsync_NullOptions_Throws()
+    {
+        await using var emitter = new TacticalApiMockEmitter();
+        await Assert.ThrowsAsync<ArgumentNullException>(
+            () => emitter.StartAsync(new BowireRecording(), null!, NullLogger.Instance, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task StartAsync_NullLogger_Throws()
+    {
+        await using var emitter = new TacticalApiMockEmitter();
+        await Assert.ThrowsAsync<ArgumentNullException>(
+            () => emitter.StartAsync(new BowireRecording(), new MockEmitterOptions(), null!, CancellationToken.None));
+    }
+
+    // -------- DisposeAsync paths --------
+
+    [Fact]
+    public async Task DisposeAsync_BeforeStart_IsNoOp()
+    {
+        var emitter = new TacticalApiMockEmitter();
+        await emitter.DisposeAsync();
+        // Double-dispose stays a no-op via the _disposed guard.
+        await emitter.DisposeAsync();
+    }
 }
