@@ -74,10 +74,30 @@ public sealed class BowireTacticalApiProtocol : IBowireProtocol
     public Task<List<BowireServiceInfo>> DiscoverAsync(
         string serverUrl, bool showInternalServices, CancellationToken ct = default)
     {
-        // The bundled .proto schema is the source of truth — the plugin's
-        // whole reason to exist is that the user can ask for typed
-        // discovery against any TacticalAPI endpoint without the server
-        // having to expose Server Reflection.
+        // Gate on the `tacticalapi@` scheme prefix — otherwise the
+        // bundled Situation service leaked into every added source URL
+        // (Petstore, custom REST APIs, arbitrary gRPC endpoints), which
+        // let the operator "call" a service that isn't on the wire +
+        // hit HTTP 464 when the gRPC request landed on a plain-REST
+        // backend. Operator: 'when using the template
+        // petstore3.swagger.io as source, i get also situation service
+        // with method list, e.g. GetSituationObjects. when calling this
+        // i get Bad gRPC response. HTTP status code: 464.'
+        //
+        // With the gate: only `tacticalapi@grpc://…` (or `tacticalapi@`
+        // for the sample's default port) surfaces the bundled
+        // descriptors. Plain `grpc://…` still discovers via Server
+        // Reflection through the core gRPC plugin.
+        if (string.IsNullOrWhiteSpace(serverUrl)
+            || !serverUrl.StartsWith("tacticalapi@", StringComparison.OrdinalIgnoreCase))
+        {
+            return Task.FromResult(new List<BowireServiceInfo>());
+        }
+
+        // The bundled .proto schema is the source of truth for this
+        // scheme — the plugin's whole reason to exist is that the user
+        // can ask for typed discovery against any TacticalAPI endpoint
+        // without the server having to expose Server Reflection.
         var services = TacticalApiDescriptors.BuildServiceInfos();
         return Task.FromResult(services);
     }
