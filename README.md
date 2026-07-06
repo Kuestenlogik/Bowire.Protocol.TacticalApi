@@ -3,7 +3,7 @@
 [![CI](https://img.shields.io/github/actions/workflow/status/Kuestenlogik/Bowire.Protocol.TacticalApi/ci.yml?branch=main&label=CI)](https://github.com/Kuestenlogik/Bowire.Protocol.TacticalApi/actions/workflows/ci.yml)
 [![NuGet](https://img.shields.io/nuget/v/Kuestenlogik.Bowire.Protocol.TacticalApi)](https://www.nuget.org/packages/Kuestenlogik.Bowire.Protocol.TacticalApi)
 [![License](https://img.shields.io/github/license/Kuestenlogik/Bowire.Protocol.TacticalApi)](https://github.com/Kuestenlogik/Bowire.Protocol.TacticalApi/blob/main/LICENSE)
-[![Bowire](https://img.shields.io/badge/Bowire-%E2%89%A5%201.5.0%2C%20%3C%202.0-006B9F)](https://github.com/Kuestenlogik/Bowire/blob/main/docs/architecture/compatibility.md)
+[![Bowire](https://img.shields.io/badge/Bowire-%E2%89%A5%202.2.1%2C%20%3C%203.0-006B9F)](https://github.com/Kuestenlogik/Bowire/blob/main/docs/architecture/compatibility.md)
 
 Bowire protocol plugin for Rheinmetall's **[TacticalAPI](https://github.com/Rheinmetall/tacticalapi)** — a gRPC interface for situational-awareness systems. The plugin bundles the upstream service schema so users get a typed discovery sidebar and invoke pane against any TacticalAPI server, **even when the server does not expose gRPC Server Reflection**.
 
