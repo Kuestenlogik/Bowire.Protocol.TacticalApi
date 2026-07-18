@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "url": "http://localhost:5191",
+      "name": "RadarSweep (this host)",
+      "protocols": ["tacticalapi"],
+      "tags": ["sample", "tacticalapi", "grpc"]
+    }
+  ]
+}

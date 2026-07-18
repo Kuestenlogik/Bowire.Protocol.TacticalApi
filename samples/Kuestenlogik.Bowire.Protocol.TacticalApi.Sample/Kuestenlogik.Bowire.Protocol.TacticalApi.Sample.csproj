@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>Kuestenlogik.Bowire.Protocol.TacticalApi.Sample</RootNamespace>
+    <!-- Sample-app code, not a library: CA1515 (make types internal) and
+         CA1812 (uninstantiated internal class) don't apply; CA1873 (defer
+         logger-arg evaluation) is overkill at this sample's volume. Matches
+         the Dis sibling sample verbatim. -->
+    <NoWarn>$(NoWarn);CA1515;CA1812;CA1873</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Embedded Bowire (workbench + plugin host) from the published
+         package — NO Version, Central Package Management pins it. The
+         TacticalAPI plugin under test is referenced by source; it already
+         generates the Rheinmetall.TacticalApi.V0 types with GrpcServices=
+         "Both"/Access="Public", so this sample reuses the plugin's public
+         Situation.SituationBase for its server rather than re-fetching the
+         upstream .proto. -->
+    <PackageReference Include="Kuestenlogik.Bowire" />
+    <ProjectReference Include="..\..\src\Kuestenlogik.Bowire.Protocol.TacticalApi\Kuestenlogik.Bowire.Protocol.TacticalApi.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- ASP.NET Core gRPC server hosting for the folded RadarSweep demo
+         server (AddGrpc + MapGrpcService). Version from central PM. -->
+    <PackageReference Include="Grpc.AspNetCore" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Update="tacticalapi-catalogue.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>
