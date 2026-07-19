@@ -23,7 +23,7 @@
          collection flag and drops one cobertura.xml per test project
          for CI / Codecov upload. -->
     <PackageVersion Include="coverlet.collector" Version="10.0.1" />
-    <PackageVersion Include="Microsoft.SourceLink.GitHub" Version="10.0.300" />
+    <PackageVersion Include="Microsoft.SourceLink.GitHub" Version="10.0.301" />
 
     <!-- ASP.NET test host for the integration suite. The TacticalAPI
          sample server isn't a redistributable container image — we'd
