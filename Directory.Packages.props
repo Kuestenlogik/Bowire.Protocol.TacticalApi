@@ -34,6 +34,6 @@
          dials it over a real HTTP/2 connection. Same end-to-end
          shape, no Docker dependency. -->
     <PackageVersion Include="Grpc.AspNetCore" Version="2.80.0" />
-    <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.9" />
+    <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.10" />
   </ItemGroup>
 </Project>
