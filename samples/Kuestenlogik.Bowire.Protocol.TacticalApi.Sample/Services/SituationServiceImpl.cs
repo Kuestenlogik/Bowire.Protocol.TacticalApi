@@ -9,10 +9,10 @@ using Rheinmetall.TacticalApi.V0;
 namespace Kuestenlogik.Bowire.Protocol.TacticalApi.Sample.Services;
 
 /// <summary>
-/// Read-only TacticalAPI demo backend. Three tracks orbit the radar
-/// centre (see <see cref="SeededSituation"/>) one full rotation every
-/// 60 seconds, broadcast as a fresh snapshot every two seconds to
-/// every active subscriber.
+/// Read-only TacticalAPI demo backend. Thirteen tracks in five groups
+/// (see <see cref="SeededSituation"/>) move under their own motion
+/// models, broadcast as a fresh snapshot every two seconds to every
+/// active subscriber.
 ///
 /// Implements two RPCs from the upstream <c>Situation</c> service:
 ///   - <see cref="GetSituationObjects"/> — current snapshot, unary.
@@ -27,12 +27,11 @@ namespace Kuestenlogik.Bowire.Protocol.TacticalApi.Sample.Services;
 /// </summary>
 internal sealed class SituationServiceImpl : Situation.SituationBase, IDisposable
 {
-    private const double DegreesPerSecond = 360.0 / 60.0;   // one full rotation per minute
     private static readonly TimeSpan TickPeriod = TimeSpan.FromSeconds(2);
 
     private readonly object _gate = new();
     private readonly Dictionary<string, SituationObject> _objects;
-    private readonly Dictionary<string, double> _initialBearings;
+    private readonly Dictionary<string, TrackMotion> _motions;
     private readonly DateTime _startUtc = DateTime.UtcNow;
     private readonly List<ChannelWriter<SubscribeSituationObjectEventsResponse>> _subscribers = [];
     private readonly CancellationTokenSource _moverCts = new();
@@ -40,19 +39,11 @@ internal sealed class SituationServiceImpl : Situation.SituationBase, IDisposabl
 
     public SituationServiceImpl()
     {
-        _objects = SeededSituation.Build();
-        // Capture each track's initial bearing from its seeded
-        // coordinate so the rotation maths can re-place it
-        // deterministically each tick.
-        _initialBearings = new(StringComparer.Ordinal);
-        foreach (var (id, obj) in _objects)
-        {
-            var geo = obj.Symbol?.Location?.Content?.Point?.GeoPoint;
-            if (geo is null) continue;
-            var dy = geo.LatitudeCoordinate - SeededSituation.CentreLatitude;
-            var dx = geo.LongitudeCoordinate - SeededSituation.CentreLongitude;
-            _initialBearings[id] = Math.Atan2(dx, dy) * 180.0 / Math.PI;
-        }
+        // Each track carries its own motion now, so nothing has to be
+        // recovered from the seeded coordinate: the old code re-derived
+        // a bearing from the starting position, which only worked while
+        // every track was on the same circle around the same centre.
+        (_objects, _motions) = SeededSituation.Build();
         _moverTask = Task.Run(() => RunMoverAsync(_moverCts.Token));
     }
 
@@ -113,20 +104,22 @@ internal sealed class SituationServiceImpl : Situation.SituationBase, IDisposabl
     private void AdvanceTracks()
     {
         var elapsedSeconds = (DateTime.UtcNow - _startUtc).TotalSeconds;
-        var sweepDegrees = elapsedSeconds * DegreesPerSecond;
         var now = Timestamp.FromDateTime(DateTime.UtcNow);
         lock (_gate)
         {
             foreach (var (id, obj) in _objects)
             {
-                if (!_initialBearings.TryGetValue(id, out var initial)) continue;
-                var bearingRad = (initial + sweepDegrees) * Math.PI / 180.0;
+                if (!_motions.TryGetValue(id, out var motion)) continue;
                 var point = obj.Symbol?.Location?.Content?.Point;
                 if (point?.GeoPoint is null) continue;
-                point.GeoPoint.LatitudeCoordinate = SeededSituation.CentreLatitude
-                    + SeededSituation.RadiusDegrees * Math.Cos(bearingRad);
-                point.GeoPoint.LongitudeCoordinate = SeededSituation.CentreLongitude
-                    + SeededSituation.RadiusDegrees * Math.Sin(bearingRad);
+
+                // Evaluated from elapsed time, not integrated per tick:
+                // a subscriber joining late sees the same positions as
+                // one listening from the start, and a missed tick cannot
+                // walk a convoy off its road.
+                var (latitude, longitude) = motion.At(elapsedSeconds);
+                point.GeoPoint.LatitudeCoordinate = latitude;
+                point.GeoPoint.LongitudeCoordinate = longitude;
                 point.LocationTime = now;
             }
         }
