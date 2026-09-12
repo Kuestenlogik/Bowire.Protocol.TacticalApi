@@ -9,9 +9,10 @@ Bowire protocol plugin for Rheinmetall's **[TacticalAPI](https://github.com/Rhei
 
 ## What it does
 
-- **Bundled schema** — at build time the plugin downloads the upstream `.proto` files, compiles them with `Grpc.Tools`, and ships only the generated C# bindings. The Bowire sidebar can render the `Situation` service tree without uploading or hand-editing `.proto` files.
+- **Bundled schema** — at build time the plugin downloads the upstream `.proto` files, compiles them with `Grpc.Tools`, and ships only the generated C# bindings. The Bowire sidebar can render the service tree without uploading or hand-editing `.proto` files.
+- **Every upstream service** — `Situation` (situational-awareness objects), `OwnPose` (the reporting platform's own position) and `BlueForceTracking` (friendly participants reporting themselves). Which services exist is a one-line list in the plugin, so an upstream addition lands in discovery, invoke, streaming and mock replay at once rather than service by service.
 - **Drop-in protocol tab** — once installed, Bowire shows a `TacticalAPI` tab next to gRPC / REST / SignalR. Connect via `bowire --url tacticalapi@<host:port>`.
-- **Server-streaming aware** — TacticalAPI's `SubscribeSituationObjectEvents` is server-streaming; the plugin surfaces it as a streaming method, not a unary call. Client-streaming and duplex aren't part of the TacticalAPI surface (no upstream RPC defines them) and the plugin rejects callers that try.
+- **Server-streaming aware** — each service has a `Subscribe…` pump (`SubscribeSituationObjectEvents`, `SubscribePositionChangedEvents`, `SubscribeBlueForceEvents`); the plugin surfaces them as streaming methods, not unary calls. Client-streaming and duplex aren't part of the TacticalAPI surface (no upstream RPC defines them) and the plugin rejects callers that try.
 - **mTLS via the shared `__bowireMtls__` marker** — same auth profile that REST / gRPC / Kafka / AMQP read; PEM cert + key + optional CA + allow-self-signed. The legacy `_bowire:client-cert-pfx` / `_bowire:client-cert-password` / `_bowire:tls-skip-validation` keys stay supported for callers that pinned against the pre-1.0 vocabulary.
 
 ## Licensing — please read
@@ -24,9 +25,9 @@ The TacticalAPI `.proto` files at <https://github.com/Rheinmetall/tacticalapi> a
 - `Grpc.Tools` then compiles them into the assembly. **Only the generated C# bindings** ship in our NuGet package.
 - The `.proto` source itself never enters our source tree or our package.
 
-If you need air-gapped builds, pre-populate `<repo-root>/artifacts/obj/Kuestenlogik.Bowire.Protocol.TacticalApi/<Configuration>/tacticalapi-protos/rheinmetall/tactical_api/v0/` with the six `.proto` files yourself (same names as upstream) and the build target will short-circuit because `DownloadFile` skips unchanged files.
+If you need air-gapped builds, pre-populate `<repo-root>/artifacts/obj/Kuestenlogik.Bowire.Protocol.TacticalApi/<Configuration>/tacticalapi-protos/rheinmetall/tactical_api/v0/` with the ten `.proto` files yourself (same names as upstream) and the build target will short-circuit because `DownloadFile` skips unchanged files.
 
-The upstream pinned commit is [`e68546809d981cd649325dba4a9702c1a77a1a0b`](https://github.com/Rheinmetall/tacticalapi/tree/e68546809d981cd649325dba4a9702c1a77a1a0b/rheinmetall/tactical_api/v0). The pin will move to a released tag once Rheinmetall cuts one.
+The upstream pinned commit is [`58661c9c5de7db1b944a37f6ed05fe16c603cd0e`](https://github.com/Rheinmetall/tacticalapi/tree/58661c9c5de7db1b944a37f6ed05fe16c603cd0e/rheinmetall/tactical_api/v0). The pin will move to a released tag once Rheinmetall cuts one.
 
 ## Install
 
@@ -42,7 +43,13 @@ Bowire discovers the plugin automatically via assembly scanning — no extra reg
 bowire --url tacticalapi@my-situation-server:50051
 ```
 
-Open the Bowire workbench, pick the **TacticalAPI** tab, and the four methods of the `Situation` service (`SubscribeSituationObjectEvents`, `GetSituationObjects`, `AddOrUpdateSituationObjects`, `DeleteSituationObjects`) appear in the sidebar.
+Open the Bowire workbench, pick the **TacticalAPI** tab, and all three services appear in the sidebar:
+
+| Service | Methods |
+|---|---|
+| `Situation` | `SubscribeSituationObjectEvents`, `GetSituationObjects`, `AddOrUpdateSituationObjects`, `DeleteSituationObjects` |
+| `OwnPose` | `SubscribePositionChangedEvents`, `GetPosition`, `UpdatePosition` |
+| `BlueForceTracking` | `SubscribeBlueForceEvents`, `GetBlueForces`, `AddOrUpdateBlueForces` |
 
 ## Build
 
@@ -56,30 +63,31 @@ dotnet test  -c Release
 
 ## Sample
 
-A runnable sample lives in the central
-[`Bowire.Samples`](https://github.com/Kuestenlogik/Bowire.Samples) repo
-under
-[`src/Kuestenlogik.Bowire.Samples.TacticalApi`](https://github.com/Kuestenlogik/Bowire.Samples/tree/main/src/Kuestenlogik.Bowire.Samples.TacticalApi)
-— a self-contained mini gRPC server seeded with three MIL-2525C
-symbols (friendly / hostile / neutral surface contacts) so Bowire's
-TacticalAPI tab has live data to discover, invoke against, and
-subscribe to without a real Rheinmetall server in the lab.
+A runnable sample lives in this repo under
+[`samples/Kuestenlogik.Bowire.Protocol.TacticalApi.Sample`](samples/Kuestenlogik.Bowire.Protocol.TacticalApi.Sample)
+— a self-contained mini gRPC server serving all three services (thirteen
+MIL-2525C tracks, four blue forces, and its own pose), with the Bowire
+workbench embedded alongside it. `dotnet run`, open
+<http://localhost:5191/bowire>, and the TacticalAPI tab has live data to
+discover, invoke against, subscribe to and — for `OwnPose` and
+`BlueForceTracking` — write to, without a real Rheinmetall server in the
+lab. See its [README](samples/Kuestenlogik.Bowire.Protocol.TacticalApi.Sample/README.md)
+for the scenario and the two writes worth driving by hand.
 
 ## Tests
 
 Unit tests run on every CI build (descriptor walk, JSON parser
 edge cases, mTLS-marker handling, URL normalisation). The
 integration suite under `tests/.../Integration` carries
-`[Trait("Category", "Docker")]` and spins up the
-Bowire.Samples.TacticalApi server in a container for end-to-end
-discovery + invoke + stream round-trips. CI runs both passes;
-local `dotnet test --filter "Category!=Docker"` skips the
-container side.
+`[Trait("Category", "Integration")]` and hosts an in-process
+Kestrel + gRPC stub of all three services for end-to-end discovery
++ invoke + stream + write round-trips — no Docker daemon needed, so
+CI and a laptop run exactly the same pass.
 
 ## What's in 1.0
 
 - Bundled-schema discovery (no Server Reflection required on the target).
-- Unary invoke + server-streaming subscribe for the whole upstream `Situation` service.
+- Unary invoke + server-streaming subscribe for every upstream service — `Situation`, `OwnPose` and `BlueForceTracking`.
 - Shared `__bowireMtls__` marker integration alongside the legacy `_bowire:` keys.
 - Plugin-tunable knobs: `invocationDeadlineSeconds`, `streamIdleSeconds`, `allowSelfSignedCerts`.
 - IBowireMockEmitter so recordings tagged `protocol: "tacticalapi"` replay through `bowire mock`.

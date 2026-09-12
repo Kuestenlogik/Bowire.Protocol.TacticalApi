@@ -18,11 +18,11 @@ namespace Kuestenlogik.Bowire.Protocol.TacticalApi.Tests.Integration;
 /// </summary>
 [Trait("Category", "Integration")]
 public sealed class TacticalApiMockEmitterE2ETests
-    : IClassFixture<InProcessSituationServerFixture>
+    : IClassFixture<InProcessTacticalApiServerFixture>
 {
-    private readonly InProcessSituationServerFixture _server;
+    private readonly InProcessTacticalApiServerFixture _server;
 
-    public TacticalApiMockEmitterE2ETests(InProcessSituationServerFixture server)
+    public TacticalApiMockEmitterE2ETests(InProcessTacticalApiServerFixture server)
     {
         _server = server;
     }
@@ -106,6 +106,62 @@ public sealed class TacticalApiMockEmitterE2ETests
             CancellationToken.None);
 
         await Task.Delay(500, TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task StartAsync_ReplaysAcrossEveryBundledService()
+    {
+        // The emitter resolves steps against TacticalApiDescriptors, so
+        // a recording is free to mix services. This one writes a blue
+        // force and holds an OwnPose subscription open — neither of
+        // which existed when the emitter was written, and neither of
+        // which needed a change in it.
+        //
+        // Unlike the other emitter tests this one can prove the call
+        // landed rather than just that nothing threw: the write is
+        // readable back off the same in-process server.
+        var recording = new BowireRecording
+        {
+            Steps =
+            {
+                MakeStep("bf-write", DateTimeOffset.UtcNow, _server.ServerUrl,
+                    service: "BlueForceTracking", method: "AddOrUpdateBlueForces",
+                    body: """
+                          {
+                            "blueForcesToUpdates": [
+                              {
+                                "identity": { "stringIdentity": "bf-replayed-1" },
+                                "callsign": "Wiederholer"
+                              }
+                            ]
+                          }
+                          """),
+                MakeStep("pose-stream", DateTimeOffset.UtcNow.AddMilliseconds(10), _server.ServerUrl,
+                    service: "OwnPose", method: "SubscribePositionChangedEvents",
+                    body: "{}"),
+            },
+        };
+
+        await using var emitter = new TacticalApiMockEmitter();
+        Assert.True(emitter.CanEmit(recording));
+
+        await emitter.StartAsync(
+            recording,
+            new MockEmitterOptions { ReplaySpeed = 10.0 },
+            NullLogger.Instance,
+            CancellationToken.None);
+
+        await Task.Delay(800, TestContext.Current.CancellationToken);
+
+        var plugin = new BowireTacticalApiProtocol();
+        var read = await plugin.InvokeAsync(
+            _server.ServerUrl.Replace("http://", "grpc://", StringComparison.Ordinal),
+            "BlueForceTracking", "GetBlueForces",
+            jsonMessages: ["{}"], showInternalServices: false,
+            metadata: null, ct: TestContext.Current.CancellationToken);
+
+        Assert.Equal("OK", read.Status);
+        Assert.Contains("Wiederholer", read.Response, StringComparison.Ordinal);
     }
 
     private static BowireRecordingStep MakeUnaryStep(

@@ -1,6 +1,6 @@
 ---
 title: TacticalAPI
-summary: 'TacticalAPI is a Bowire sibling plugin that wraps Rheinmetall''s situational-awareness gRPC interface with a bundled schema so the Situation service tree renders even without Server Reflection. Discovery, typed unary CRUD, server-streaming pump, mTLS via the shared __bowireMtls__ marker, IBowireMockEmitter for recording replay.'
+summary: 'TacticalAPI is a Bowire sibling plugin that wraps Rheinmetall''s situational-awareness gRPC interface with a bundled schema so the service tree renders even without Server Reflection. Discovery and typed invoke for Situation, OwnPose and BlueForceTracking, a server-streaming pump per service, mTLS via the shared __bowireMtls__ marker, IBowireMockEmitter for recording replay.'
 ---
 
 <!--
@@ -19,9 +19,9 @@ summary: 'TacticalAPI is a Bowire sibling plugin that wraps Rheinmetall''s situa
 
 # TacticalAPI
 
-The TacticalAPI plugin connects Bowire to Rheinmetall's situational-awareness gRPC interface: bundled-schema discovery (no Server Reflection on the target needed), typed unary invoke for `GetSituationObjects` / `AddOrUpdateSituationObjects` / `DeleteSituationObjects`, the server-streaming pump for `SubscribeSituationObjectEvents`, URL-scheme normalisation (`tacticalapi@host:port`, `grpc(s)://`, bare `host:port`), and mTLS via the shared `__bowireMtls__` marker alongside the legacy `_bowire:client-cert-pfx` keys.
+The TacticalAPI plugin connects Bowire to Rheinmetall's situational-awareness gRPC interface: bundled-schema discovery (no Server Reflection on the target needed), typed unary invoke across `Situation`, `OwnPose` and `BlueForceTracking`, a server-streaming pump per service, URL-scheme normalisation (`tacticalapi@host:port`, `grpc(s)://`, bare `host:port`), and mTLS via the shared `__bowireMtls__` marker alongside the legacy `_bowire:client-cert-pfx` keys.
 
-The TacticalAPI plugin connects Bowire to [Rheinmetall's **TacticalAPI**](https://github.com/Rheinmetall/tacticalapi) &mdash; a gRPC interface for situational-awareness systems. The plugin ships the upstream service schema bundled with the package, so Bowire can render the `Situation` service tree against any TacticalAPI server **even when the server does not expose gRPC Server Reflection**.
+The TacticalAPI plugin connects Bowire to [Rheinmetall's **TacticalAPI**](https://github.com/Rheinmetall/tacticalapi) &mdash; a gRPC interface for situational-awareness systems. The plugin ships the upstream service schema bundled with the package, so Bowire can render the service tree against any TacticalAPI server **even when the server does not expose gRPC Server Reflection**.
 
 **Package:** `Kuestenlogik.Bowire.Protocol.TacticalApi` (sibling repo, not bundled with the CLI)
 
@@ -39,7 +39,15 @@ Bowire discovers the plugin automatically via assembly scanning &mdash; no extra
 bowire --url tacticalapi@my-situation-server:50051
 ```
 
-Open the workbench, pick the **TacticalAPI** tab, and the four methods of the `Situation` service (`SubscribeSituationObjectEvents`, `GetSituationObjects`, `AddOrUpdateSituationObjects`, `DeleteSituationObjects`) appear in the sidebar. Click **Execute** on any unary method and the call goes out to the server; pick the streaming method and the workbench's Wireshark-style frame pane starts filling with `SituationObject` events as they're emitted.
+Open the workbench, pick the **TacticalAPI** tab, and all three upstream services appear in the sidebar:
+
+| Service | Methods | What it carries |
+|---|---|---|
+| `Situation` | `SubscribeSituationObjectEvents`, `GetSituationObjects`, `AddOrUpdateSituationObjects`, `DeleteSituationObjects` | Situational-awareness objects a system reports *about* &mdash; symbols, action tasks, organisation units. |
+| `OwnPose` | `SubscribePositionChangedEvents`, `GetPosition`, `UpdatePosition` | The reporting platform's *own* position, and a way to set it. |
+| `BlueForceTracking` | `SubscribeBlueForceEvents`, `GetBlueForces`, `AddOrUpdateBlueForces` | Friendly participants reporting *themselves*, on a 30 s keep-alive: a blue force that stops being re-sent is deleted implicitly. |
+
+Click **Execute** on any unary method and the call goes out to the server; pick a streaming method and the workbench's Wireshark-style frame pane starts filling with events as they're emitted.
 
 ### URL forms
 
@@ -72,7 +80,7 @@ TacticalAPI servers commonly expose **two ports**: a native HTTP/2 gRPC endpoint
 
 The plugin code, generated bindings package, and documentation are **Apache-2.0**. The upstream TacticalAPI `.proto` files at <https://github.com/Rheinmetall/tacticalapi> are **EPL-2.0 OR BSD-3-Clause** (Rheinmetall Electronics GmbH). Vendoring those files into an Apache-2.0 repository would be redistribution under a different license, which EPL-2.0 does not permit. To honour both:
 
-- The `.proto` files are **downloaded at build time** from the upstream repository (pinned commit `e68546809d981cd649325dba4a9702c1a77a1a0b`) into `obj/tacticalapi-protos/` &mdash; gitignored, never committed.
+- The `.proto` files are **downloaded at build time** from the upstream repository (pinned commit `58661c9c5de7db1b944a37f6ed05fe16c603cd0e`) into `obj/tacticalapi-protos/` &mdash; gitignored, never committed.
 - `Grpc.Tools` compiles them into the assembly; **only the generated C# bindings** ship in the NuGet package.
 - The `.proto` source itself never enters the plugin's source tree or its published package.
 
@@ -90,11 +98,11 @@ Pre-populate the proto cache before invoking `dotnet build`:
 <repo-root>/artifacts/obj/Kuestenlogik.Bowire.Protocol.TacticalApi/<Configuration>/tacticalapi-protos/rheinmetall/tactical_api/v0/
 ```
 
-Drop the six upstream `.proto` files (same filenames as on `Rheinmetall/tacticalapi`) into that directory and the build's `DownloadFile` target short-circuits because the files already exist. Consumers of the **published NuGet package** don't need network access &mdash; only contributors and CI building from source do.
+Drop the ten upstream `.proto` files (same filenames as on `Rheinmetall/tacticalapi`) into that directory and the build's `DownloadFile` target short-circuits because the files already exist. Consumers of the **published NuGet package** don't need network access &mdash; only contributors and CI building from source do.
 
 ## Try it — upstream test client as data populator
 
-Rheinmetall ships an [official C# test client](https://github.com/Rheinmetall/tacticalapi/tree/main/testclient/csharp) alongside the proto set. It's a small CLI that exercises every operation in `Situation` &mdash; `--observesituation` (server-streaming), `--printsituation` (unary polling), `--sendsymbol` (create), `--changesymbolname` (update), `--deletesymbol` (delete). For Bowire users the test client is the fastest way to **populate a server with realistic data** so the workbench has something interesting to render.
+Rheinmetall ships an [official C# test client](https://github.com/Rheinmetall/tacticalapi/tree/main/testclient/csharp) alongside the proto set. It's a small CLI that exercises every operation on all three services &mdash; `--observesituation` (server-streaming), `--printsituation` (unary polling), `--sendsymbol` (create), `--changesymbolname` (update), `--deletesymbol` (delete), plus `--setownposition` / `--printownposition` / `--observeownposition` on `OwnPose` and `--updateblueforce` / `--printblueforces` / `--observeblueforces` on `BlueForceTracking`. For Bowire users the test client is the fastest way to **populate a server with realistic data** so the workbench has something interesting to render.
 
 End-to-end demo, against either a live TacticalAPI server or the upstream `TacNet` instance:
 
@@ -138,11 +146,12 @@ A companion walkthrough in **[the mock-server docs](../features/mock-server.md#e
 ## Roadmap
 
 - **v1.0.0 (shipped 2026-05-26)** &mdash; bundled-schema discovery, typed unary CRUD (`GetSituationObjects` / `AddOrUpdateSituationObjects` / `DeleteSituationObjects`), the server-streaming pump for `SubscribeSituationObjectEvents`, URL-scheme normalisation (`tacticalapi@`, `grpc(s)://`, bare `host:port`), mTLS via the shared `__bowireMtls__` marker (legacy `_bowire:client-cert-pfx` keys still honoured for back-compat), `IBowireMockEmitter` for recording replay, in-process Kestrel-hosted integration suite. The current stable line.
+- **post-1.0 (shipped)** &mdash; the upstream pin moved to `58661c9` ("Add position and blue force tracking"), which brought the `OwnPose` and `BlueForceTracking` services. Both are discovered, invoked and replayed on the path `Situation` already used; the plugin now iterates a list of service-bearing `.proto` files instead of naming one, so the next upstream service is a one-line change. Nothing in the existing surface broke &mdash; the only edit upstream made to a file the plugin already compiled was two blank lines removed from `situation_object_updates.proto`.
 - **post-1.0** &mdash; MIL-STD-2525 / APP-6 symbol renderer (the schema's `SymbolIdentifier` field is already wired through; the map widget side needs a [milsymbol.js](https://github.com/spatialillusions/milsymbol)-style renderer to turn the SIDC into the correct tactical-affiliation glyph). Service-Bus / Artemis-flavoured AMQP 1.0 discovery (parallel item on the AMQP plugin's side) could similarly land as a vendor-specific follow-on.
 
 ## Sample
 
-A canonical mini-server lives at [`Bowire.Protocol.TacticalApi/samples/Kuestenlogik.Bowire.Protocol.TacticalApi.Sample`](https://github.com/Kuestenlogik/Bowire.Protocol.TacticalApi/tree/main/samples/Kuestenlogik.Bowire.Protocol.TacticalApi.Sample) &mdash; the same RadarSweep (three MIL-2525C contacts orbiting a radar centre at 54.00&deg;N / 11.50&deg;E), now folded into a *combined* sample that also mounts the embedded workbench at `/bowire` on port 5191. `dotnet run`, then open <http://localhost:5191/bowire> (the `Situation` service is pre-seeded), or point an external Bowire at `http://localhost:5191` and pick `Situation` to exercise `GetSituationObjects` (unary) + `SubscribeSituationObjectEvents` (server-streaming). For a full Harbor Control Center scene with the AddOrUpdate / Delete RPCs and gRPC-Web on a second port, see the harbor-demo sibling [`Bowire.Samples/harbor-demo/src/Kuestenlogik.Bowire.Samples.TacticalApi`](https://github.com/Kuestenlogik/Bowire.Samples/tree/main/harbor-demo/src/Kuestenlogik.Bowire.Samples.TacticalApi).
+A canonical mini-server lives at [`Bowire.Protocol.TacticalApi/samples/Kuestenlogik.Bowire.Protocol.TacticalApi.Sample`](https://github.com/Kuestenlogik/Bowire.Protocol.TacticalApi/tree/main/samples/Kuestenlogik.Bowire.Protocol.TacticalApi.Sample) &mdash; RadarSweep grown into a *combined* sample that serves all three services and mounts the embedded workbench beside them. `dotnet run`, then open <http://localhost:5191/bowire> for the workbench (HTTP/1.1); the gRPC services listen on `http://localhost:5192` (cleartext HTTP/2) and are already seeded into the Sources rail, so an external Bowire connects with `bowire --url tacticalapi@http://localhost:5192`. Thirteen `Situation` tracks in five groups exercise the read side, and two writes are worth driving by hand: `OwnPose.UpdatePosition` moves the own pose, the blue force flagged `own_blue_force` and the UAV mounted on it in one call; a blue force added via `AddOrUpdateBlueForces` and then left alone comes back once with `is_deleted` after 30 s. The ports are split because ALPN lives in the TLS handshake, so one *cleartext* socket cannot serve both HTTP/1.1 and h2c. For a full Harbor Control Center scene with the `Situation` AddOrUpdate / Delete RPCs and gRPC-Web on a second port, see the harbor-demo sibling [`Bowire.Samples/harbor-demo/src/Kuestenlogik.Bowire.Samples.TacticalApi`](https://github.com/Kuestenlogik/Bowire.Samples/tree/main/harbor-demo/src/Kuestenlogik.Bowire.Samples.TacticalApi).
 
 ## Links
 

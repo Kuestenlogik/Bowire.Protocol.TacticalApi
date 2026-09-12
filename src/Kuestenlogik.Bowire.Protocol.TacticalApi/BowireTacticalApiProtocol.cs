@@ -21,9 +21,12 @@ namespace Kuestenlogik.Bowire.Protocol.TacticalApi;
 /// <para>
 /// Discovery is served from the bundled descriptors; invocation walks the
 /// generated <see cref="ServiceDescriptor"/> graph and dispatches over
-/// <c>Grpc.Net.Client</c>. <see cref="OpenChannelAsync"/> returns
-/// <c>null</c> because TacticalAPI's only streaming RPC is server-streaming,
-/// not duplex — a stable contract, not a pre-1.0 hedge.
+/// <c>Grpc.Net.Client</c>. The surface is whatever
+/// <see cref="TacticalApiDescriptors.ServiceFiles"/> lists — today
+/// <c>Situation</c>, <c>OwnPose</c> and <c>BlueForceTracking</c>.
+/// <see cref="OpenChannelAsync"/> returns <c>null</c> because every
+/// TacticalAPI streaming RPC is server-streaming, not duplex — a stable
+/// contract, not a pre-1.0 hedge.
 /// </para>
 /// </summary>
 public sealed class BowireTacticalApiProtocol : IBowireProtocol
@@ -75,7 +78,7 @@ public sealed class BowireTacticalApiProtocol : IBowireProtocol
         string serverUrl, bool showInternalServices, CancellationToken ct = default)
     {
         // Gate on the `tacticalapi@` scheme prefix — otherwise the
-        // bundled Situation service leaked into every added source URL
+        // bundled services leaked into every added source URL
         // (Petstore, custom REST APIs, arbitrary gRPC endpoints), which
         // let the operator "call" a service that isn't on the wire +
         // hit HTTP 464 when the gRPC request landed on a plain-REST
@@ -104,8 +107,9 @@ public sealed class BowireTacticalApiProtocol : IBowireProtocol
 
     /// <inheritdoc />
     /// <remarks>
-    /// Unary path uses the bundled <see cref="SituationServiceReflection.Descriptor"/>
-    /// to resolve the (service, method) tuple, parses the request JSON into a
+    /// Unary path resolves the (service, method) tuple against the bundled
+    /// descriptors via <see cref="TacticalApiDescriptors.TryResolve(string, string, out ServiceDescriptor?, out MethodDescriptor?, out string?)"/>,
+    /// parses the request JSON into a
     /// typed <see cref="IMessage"/> via the descriptor's parser, serializes to
     /// the protobuf wire format, dispatches over <see cref="CallInvoker"/> with
     /// a passthrough <see cref="Method{TRequest,TResponse}"/> (same pattern as
@@ -117,9 +121,10 @@ public sealed class BowireTacticalApiProtocol : IBowireProtocol
     /// <para>
     /// Server-streaming methods are routed to <see cref="InvokeStreamAsync"/>.
     /// Client-streaming and duplex-streaming aren't part of the TacticalAPI
-    /// surface (no upstream Rheinmetall RPC defines them and none is on the
-    /// .proto roadmap), so the shape-check on this entry point rejects them
-    /// with a "wrong-method-shape" hint rather than implementing dead code.
+    /// surface — the upstream commit that added <c>OwnPose</c> and
+    /// <c>BlueForceTracking</c> kept to the same two shapes Situation uses,
+    /// so the shape-check on this entry point rejects them with a
+    /// "wrong-method-shape" hint rather than implementing dead code.
     /// </para>
     /// </remarks>
     public async Task<InvokeResult> InvokeAsync(
@@ -129,7 +134,7 @@ public sealed class BowireTacticalApiProtocol : IBowireProtocol
     {
         ArgumentException.ThrowIfNullOrEmpty(serverUrl);
 
-        if (!TryResolveMethod(service, method, out var serviceDesc, out var methodDesc, out var resolveError))
+        if (!TacticalApiDescriptors.TryResolve(service, method, out var serviceDesc, out var methodDesc, out var resolveError))
             return ErrorResult(resolveError!, "not-found");
 
         if (methodDesc!.IsClientStreaming || methodDesc.IsServerStreaming)
@@ -202,37 +207,6 @@ public sealed class BowireTacticalApiProtocol : IBowireProtocol
         }
     }
 
-    private static bool TryResolveMethod(
-        string service, string method,
-        out ServiceDescriptor? serviceDescriptor,
-        out MethodDescriptor? methodDescriptor,
-        out string? error)
-    {
-        var file = SituationServiceReflection.Descriptor;
-        serviceDescriptor = file.Services.FirstOrDefault(s =>
-            string.Equals(s.FullName, service, StringComparison.Ordinal) ||
-            string.Equals(s.Name, service, StringComparison.Ordinal));
-        if (serviceDescriptor is null)
-        {
-            methodDescriptor = null;
-            error = $"Service '{service}' is not part of the bundled TacticalAPI descriptors. " +
-                    $"Known: {string.Join(", ", file.Services.Select(s => s.FullName))}.";
-            return false;
-        }
-
-        methodDescriptor = serviceDescriptor.Methods.FirstOrDefault(m =>
-            string.Equals(m.Name, method, StringComparison.Ordinal));
-        if (methodDescriptor is null)
-        {
-            error = $"Method '{method}' not declared on '{serviceDescriptor.FullName}'. " +
-                    $"Known: {string.Join(", ", serviceDescriptor.Methods.Select(m => m.Name))}.";
-            return false;
-        }
-
-        error = null;
-        return true;
-    }
-
     private static Metadata BuildMetadata(Dictionary<string, string>? source)
     {
         var headers = new Metadata();
@@ -285,9 +259,10 @@ public sealed class BowireTacticalApiProtocol : IBowireProtocol
     /// and each emitted frame is yielded as a JSON string.
     /// <para>
     /// Client- and duplex-streaming still return the "wrong-method-shape"
-    /// hint via <see cref="InvokeAsync"/> — TacticalAPI's only streaming
-    /// RPC today is server-streaming (SubscribeSituationObjectEvents), and
-    /// nothing on the upstream .proto roadmap suggests that's about to
+    /// hint via <see cref="InvokeAsync"/> — every TacticalAPI streaming RPC
+    /// is server-streaming (<c>SubscribeSituationObjectEvents</c>,
+    /// <c>SubscribePositionChangedEvents</c>, <c>SubscribeBlueForceEvents</c>),
+    /// and nothing on the upstream .proto roadmap suggests that's about to
     /// change. The shape-checks live on the unary entry point so the
     /// streaming entry point can stay narrow.
     /// </para>
@@ -300,7 +275,7 @@ public sealed class BowireTacticalApiProtocol : IBowireProtocol
     {
         ArgumentException.ThrowIfNullOrEmpty(serverUrl);
 
-        if (!TryResolveMethod(service, method, out var serviceDesc, out var methodDesc, out var resolveError))
+        if (!TacticalApiDescriptors.TryResolve(service, method, out var serviceDesc, out var methodDesc, out var resolveError))
         {
             yield return $$"""{ "error": {{System.Text.Json.JsonSerializer.Serialize(resolveError)}} }""";
             yield break;
@@ -363,8 +338,9 @@ public sealed class BowireTacticalApiProtocol : IBowireProtocol
         bool showInternalServices, Dictionary<string, string>? metadata = null,
         CancellationToken ct = default)
     {
-        // TacticalAPI's only streaming method (SubscribeSituationObjectEvents)
-        // is server-streaming, not duplex — no interactive channel surface.
+        // Every TacticalAPI streaming method — the Situation, OwnPose and
+        // BlueForceTracking subscribe pumps — is server-streaming, not
+        // duplex, so there is no interactive channel surface to open.
         return Task.FromResult<IBowireChannel?>(null);
     }
 }

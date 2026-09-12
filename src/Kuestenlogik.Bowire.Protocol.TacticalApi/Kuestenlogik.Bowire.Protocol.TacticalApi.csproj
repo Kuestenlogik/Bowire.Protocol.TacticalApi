@@ -39,11 +39,13 @@
     The bindings are derivative of the .proto schema but the .proto source
     itself never lands in our source tree or our NuGet package.
 
-    Pinned commit: e68546809d981cd649325dba4a9702c1a77a1a0b — the upstream
-    initial commit. TODO: bump to a released tag once Rheinmetall cuts one.
+    Pinned commit: 58661c9c5de7db1b944a37f6ed05fe16c603cd0e — "Add position
+    and blue force tracking", which added the OwnPose and BlueForceTracking
+    services next to Situation. TODO: bump to a released tag once
+    Rheinmetall cuts one.
   -->
   <PropertyGroup>
-    <TacticalApiProtoSha>e68546809d981cd649325dba4a9702c1a77a1a0b</TacticalApiProtoSha>
+    <TacticalApiProtoSha>58661c9c5de7db1b944a37f6ed05fe16c603cd0e</TacticalApiProtoSha>
     <TacticalApiProtoBaseUrl>https://raw.githubusercontent.com/Rheinmetall/tacticalapi/$(TacticalApiProtoSha)/rheinmetall/tactical_api/v0</TacticalApiProtoBaseUrl>
     <!--
       The .proto files reference each other with their full path
@@ -68,6 +70,10 @@
     <MakeDir Directories="$(TacticalApiProtoDir)" />
 
     <ItemGroup>
+      <_TacticalApiProtoFile Include="blue_force_tracking_service.proto" />
+      <_TacticalApiProtoFile Include="blue_force_types.proto" />
+      <_TacticalApiProtoFile Include="own_pose_service.proto" />
+      <_TacticalApiProtoFile Include="position_types.proto" />
       <_TacticalApiProtoFile Include="service_types.proto" />
       <_TacticalApiProtoFile Include="situation_object_locations.proto" />
       <_TacticalApiProtoFile Include="situation_object_types.proto" />

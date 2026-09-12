@@ -100,6 +100,7 @@ jobs:
             echo "### Bump procedure"
             echo "1. Verify upstream changes don't break our \`BowireTacticalApiProtocol\` / descriptor lookup."
             echo "2. Update \`<TacticalApiProtoSha>\` in \`src/.../Kuestenlogik.Bowire.Protocol.TacticalApi.csproj\` to \`$HEAD\`."
+            echo "   Added files also need an entry in the \`_TacticalApiProtoFile\` group, and a new *service* needs its generated reflection descriptor in \`TacticalApiDescriptors.ServiceFiles\` — nothing else downstream names a file."
             echo "3. \`dotnet pack -c Release\` locally to verify the new \`.proto\` files compile."
             echo "4. Bump the plugin's own version, tag, push."
             echo ""
