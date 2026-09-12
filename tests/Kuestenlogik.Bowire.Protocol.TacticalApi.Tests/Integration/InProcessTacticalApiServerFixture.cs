@@ -164,9 +164,30 @@ internal sealed class IntegrationOwnPoseService : OwnPose.OwnPoseBase
         }
     }
 
+    /// <summary>
+    /// Request header that makes the subscribe pump answer with a refusing
+    /// frame instead of data, so the stream-side header check is testable.
+    /// </summary>
+    internal const string RefuseHeader = "x-fixture-refuse";
+
+    /// <summary>The wording both refusal paths use, asserted by the tests.</summary>
+    internal const string RefusalMessage = "source_identifier is required";
+
     public override Task<UpdatePositionResponse> UpdatePosition(
         UpdatePositionRequest request, ServerCallContext context)
     {
+        // TacticalAPI reports a rejected operation in the response header, not
+        // as a gRPC error — an ordinary OK carrying success = false
+        // (service_types.proto). Mirrors the sample server, and exists so the
+        // plugin's refusal path has something real to read (#66).
+        if (string.IsNullOrWhiteSpace(request?.Position?.SourceIdentifier))
+        {
+            return Task.FromResult(new UpdatePositionResponse
+            {
+                Header = new ResponseHeader { Success = false, ErrorMessage = RefusalMessage },
+            });
+        }
+
         lock (_gate)
         {
             _position = new Position
@@ -187,6 +208,19 @@ internal sealed class IntegrationOwnPoseService : OwnPose.OwnPoseBase
         IServerStreamWriter<SubscribePositionEventsResponse> responseStream,
         ServerCallContext context)
     {
+        // A refusing frame on request. Upstream's reference client checks the
+        // header of every frame and throws on it, so the plugin has to treat
+        // one as an error rather than as data (#66).
+        if (context.RequestHeaders.Get(RefuseHeader) is not null)
+        {
+            await responseStream.WriteAsync(
+                new SubscribePositionEventsResponse
+                {
+                    Header = new ResponseHeader { Success = false, ErrorMessage = RefusalMessage },
+                }).ConfigureAwait(false);
+            return;
+        }
+
         for (var i = 0; i < 2; i++)
         {
             await responseStream.WriteAsync(

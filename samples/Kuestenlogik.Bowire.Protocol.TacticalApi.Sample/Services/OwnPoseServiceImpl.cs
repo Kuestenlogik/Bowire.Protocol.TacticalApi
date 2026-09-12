@@ -46,6 +46,23 @@ internal sealed class OwnPoseServiceImpl(OwnPlatform platform)
         UpdatePositionRequest request, ServerCallContext context)
     {
         ArgumentNullException.ThrowIfNull(request);
+
+        // A refusal the sample can actually produce. TacticalAPI reports a
+        // rejected operation in the response header, not as a gRPC error
+        // (service_types.proto: success + error_message), and upstream's
+        // reference client sets `SourceIdentifier` on every own-pose write.
+        // Without a path like this one, nothing here ever answers
+        // `success = false` and the whole refusal branch goes untested — which
+        // is how the plugin came to report refusals as OK (#66).
+        if (string.IsNullOrWhiteSpace(request.Position?.SourceIdentifier))
+        {
+            return Task.FromResult(new UpdatePositionResponse
+            {
+                Header = RefusedHeader(
+                    "position.source_identifier is required — name the system reporting this fix."),
+            });
+        }
+
         platform.Apply(request.Position);
 
         // Push straight away as well as on the next tick: the operator
@@ -87,4 +104,11 @@ internal sealed class OwnPoseServiceImpl(OwnPlatform platform)
         new() { Header = OkHeader(), Position = platform.Current() };
 
     private static ResponseHeader OkHeader() => new() { Success = true };
+
+    /// <summary>
+    /// The shape a TacticalAPI server uses to say no: a gRPC-level success
+    /// whose header carries <c>success = false</c> and the reason.
+    /// </summary>
+    private static ResponseHeader RefusedHeader(string why) =>
+        new() { Success = false, ErrorMessage = why };
 }

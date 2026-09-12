@@ -26,6 +26,7 @@
     <!-- ASP.NET Core gRPC server hosting for the folded RadarSweep demo
          server (AddGrpc + MapGrpcService). Version from central PM. -->
     <PackageReference Include="Grpc.AspNetCore" />
+    <PackageReference Include="Grpc.AspNetCore.Web" />
   </ItemGroup>
 
   <ItemGroup>

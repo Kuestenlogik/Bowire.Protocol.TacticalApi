@@ -1,6 +1,7 @@
 // Copyright 2026 Küstenlogik
 // SPDX-License-Identifier: Apache-2.0
 
+using System.Linq;
 using Google.Protobuf.Reflection;
 using Kuestenlogik.Bowire.Models;
 using Rheinmetall.TacticalApi.V0;
@@ -61,8 +62,14 @@ internal static class TacticalApiDescriptors
                     FullName: $"{service.FullName}/{m.Name}",
                     ClientStreaming: m.IsClientStreaming,
                     ServerStreaming: m.IsServerStreaming,
-                    InputType: BuildMessageInfo(m.InputType),
-                    OutputType: BuildMessageInfo(m.OutputType),
+                    // Request types are projected with their nested structure, so
+                    // the invoke form can render a write and show the contract's
+                    // annotations (#68). Response types stay flat: nothing builds a
+                    // form from them, the operator reads the JSON, and descending
+                    // both sides inflated one discovery response from 4 KB to
+                    // 660 KB against this schema.
+                    InputType: BuildMessageInfo(m.InputType, descend: true),
+                    OutputType: BuildMessageInfo(m.OutputType, descend: false),
                     MethodType: ClassifyMethodType(m)));
             }
 
@@ -90,12 +97,55 @@ internal static class TacticalApiDescriptors
         }
     }
 
-    /// <summary>Shallow message-info projection — fields only, no descent into nested message types.</summary>
-    private static BowireMessageInfo BuildMessageInfo(MessageDescriptor msg)
+    /// <summary>
+    /// How far the projection descends into nested message types.
+    /// </summary>
+    /// <remarks>
+    /// Four levels, because that is what a write needs:
+    /// <c>AddOrUpdateSituationObjectsRequest.situation_objects</c> →
+    /// <c>UpdateSituationObject.symbol</c> → <c>UpdateSymbol.name</c> →
+    /// <c>UpdatePropertyString.content</c>. The projection used to stop at the
+    /// top level, which meant the invoke form showed one repeated field and
+    /// nothing inside it — and the contract annotations (#68), which live on
+    /// exactly those nested messages, reached nobody. Deeper than this and the
+    /// discovery payload grows without helping: the situation-object graph is
+    /// wide, and an operator who needs level five is writing the JSON by hand
+    /// anyway.
+    /// </remarks>
+    private const int MaxNestingDepth = 4;
+
+    /// <summary>
+    /// Project a message and, up to <see cref="MaxNestingDepth"/>, the messages
+    /// its fields carry — with the field annotations the contract states in
+    /// prose (#68).
+    /// </summary>
+    private static BowireMessageInfo BuildMessageInfo(MessageDescriptor msg, bool descend = true) =>
+        BuildMessageInfo(msg, depth: descend ? 0 : MaxNestingDepth, ancestry: []);
+
+    private static BowireMessageInfo BuildMessageInfo(
+        MessageDescriptor msg, int depth, HashSet<string> ancestry)
     {
         var fields = new List<BowireFieldInfo>(msg.Fields.InFieldNumberOrder().Count);
         foreach (var f in msg.Fields.InFieldNumberOrder())
         {
+            // Recursion stops on depth and on the path, not on "seen anywhere":
+            // Identity appears under nearly every write message, and a global
+            // visited-set would project it once and leave every later field
+            // hollow. The schema does contain cycles (a situation object can
+            // reference its own kind), which the ancestry check breaks.
+            BowireMessageInfo? nested = null;
+            if (f.FieldType == FieldType.Message
+                && f.MessageType is { } nestedDescriptor
+                && depth < MaxNestingDepth
+                && !ancestry.Contains(nestedDescriptor.FullName))
+            {
+                var nextAncestry = new HashSet<string>(ancestry, StringComparer.Ordinal)
+                {
+                    msg.FullName,
+                };
+                nested = BuildMessageInfo(nestedDescriptor, depth + 1, nextAncestry);
+            }
+
             fields.Add(new BowireFieldInfo(
                 Name: f.Name,
                 Number: f.FieldNumber,
@@ -103,10 +153,132 @@ internal static class TacticalApiDescriptors
                 Label: f.IsRepeated ? "repeated" : (f.IsMap ? "map" : "optional"),
                 IsMap: f.IsMap,
                 IsRepeated: f.IsRepeated && !f.IsMap,
-                MessageType: null,
-                EnumValues: null));
+                MessageType: nested,
+                EnumValues: f.FieldType == FieldType.Enum && f.EnumType is { } enumType
+                    ? enumType.Values
+                        .Select(v => new BowireEnumValue(v.Name, v.Number))
+                        .ToList()
+                    : null)
+            {
+                Required = IsRequiredByContract(f),
+                Description = DescribeContract(f),
+            });
         }
         return new BowireMessageInfo(msg.Name, msg.FullName, fields);
+    }
+
+    /// <summary>
+    /// Project one bundled message by its simple name, so the contract
+    /// annotations (#68) can be pinned by a test.
+    /// </summary>
+    /// <remarks>
+    /// A seam rather than a reach through <see cref="BuildServiceInfos"/>: that
+    /// projection is deliberately shallow, so the messages carrying the
+    /// annotations — <c>UpdateSymbol</c>, <c>UpdatePropertyString</c> — are
+    /// nested below the request types and never appear in its output. Searches
+    /// the service files and everything they import, because the write messages
+    /// live in <c>situation_object_updates.proto</c> while the services live
+    /// next door.
+    /// </remarks>
+    internal static BowireMessageInfo DescribeMessageForTests(string messageName)
+    {
+        foreach (var file in ServiceFiles)
+        {
+            foreach (var candidate in Walk(file))
+            {
+                var found = candidate.FindTypeByName<MessageDescriptor>(messageName);
+                if (found is not null) return BuildMessageInfo(found);
+            }
+        }
+
+        throw new InvalidOperationException($"No bundled message named '{messageName}'.");
+
+        static IEnumerable<FileDescriptor> Walk(FileDescriptor file)
+        {
+            yield return file;
+            foreach (var dep in file.Dependencies) yield return dep;
+        }
+    }
+
+    // ---- contract semantics the descriptor cannot carry ---------------------
+    //
+    // proto3 has no `required`, and Grpc.Tools drops comments unless the
+    // generator keeps source info — so the rules the upstream .proto files
+    // state in prose reach the workbench from here or not at all. Without them
+    // the invoke form shows a flat tree of every property, which invites
+    // sending a complete object: a legitimate request that silently overwrites
+    // the properties the operator never meant to touch (#68).
+    //
+    // Provenance: rheinmetall/tactical_api/v0/{situation_object_updates,types}.proto
+    // at the pinned commit 58661c9c5de7db1b944a37f6ed05fe16c603cd0e. Re-read
+    // them on the next proto bump — the wording below is quoted from there.
+
+    /// <summary>Envelope fields every write and delete message marks "Required:".</summary>
+    private static readonly HashSet<string> RequiredEnvelopeFields =
+        new(StringComparer.Ordinal) { "identity", "reporter", "reporting_time" };
+
+    /// <summary>
+    /// True for the three fields upstream marks <c>Required:</c> on every
+    /// write / delete message (<c>UpdateSymbol</c>, <c>UpdateActionTask</c>,
+    /// <c>DeleteSituationObject</c>, …). Keyed by field name rather than by a
+    /// per-message table because the annotation is uniform across them — a
+    /// table would be a second list to keep aligned with the protos.
+    /// </summary>
+    private static bool IsRequiredByContract(FieldDescriptor f) =>
+        RequiredEnvelopeFields.Contains(f.Name)
+        && (f.ContainingType.Name.StartsWith("Update", StringComparison.Ordinal)
+            || f.ContainingType.Name.StartsWith("Delete", StringComparison.Ordinal));
+
+    /// <summary>
+    /// What the operator has to know before filling this field: the
+    /// oneof-exclusivity the descriptor knows, plus the rules the upstream
+    /// comments state and the descriptor does not carry.
+    /// </summary>
+    private static string? DescribeContract(FieldDescriptor f)
+    {
+        var notes = new List<string>(2);
+
+        // Straight from the descriptor, so it cannot drift: "Note: only one of
+        // the situation object types is supported at a time!"
+        if (f.ContainingOneof is { } oneof)
+            notes.Add($"One of '{oneof.Name}' — only one field in this group may be set.");
+
+        switch (f.Name)
+        {
+            case "identity" when IsRequiredByContract(f):
+                notes.Add("Required: the object's unique identity.");
+                break;
+            case "reporter" when IsRequiredByContract(f):
+                notes.Add(
+                    "Required: the ID of the reporter that generated the change. "
+                    + "Use the value you get from Rheinmetall — \"TacticalAPI\" if in doubt.");
+                break;
+            case "reporting_time" when IsRequiredByContract(f):
+                notes.Add(
+                    "Required: time of the change in UTC. Only the most up-to-date information "
+                    + "is considered, so use the current time for new changes — but keep the "
+                    + "previous timestamp when nothing changed.");
+                break;
+
+            // "These data properties specify the fields to be changed. That
+            // means the content value can be null. If the value should not be
+            // changed, then omit the entire property."
+            case "content" when f.ContainingType.Name.StartsWith("UpdateProperty", StringComparison.Ordinal):
+                notes.Add(
+                    "Sparse update: omit the whole property to leave the current value untouched. "
+                    + "Sending the property with no content clears the value.");
+                break;
+
+            case "int32_identity":
+            case "int64_identity":
+                notes.Add("Not for external use — reserved for internal low-bandwidth scenarios.");
+                break;
+
+            default:
+                break;
+        }
+
+        return notes.Count == 0 ? null : string.Join(" ", notes);
     }
 
     private static string ClassifyMethodType(MethodDescriptor m)

@@ -28,6 +28,8 @@
 //   dotnet run --project samples/Kuestenlogik.Bowire.Protocol.TacticalApi.Sample
 //   → open http://localhost:5191/bowire (workbench, HTTP/1.1)
 //   → gRPC on http://localhost:5192 (h2c)
+//   → the same three services as gRPC-Web on http://localhost:5191
+//     (HTTP/1.1) — turn on the plugin's `useGrpcWeb` setting to dial it
 
 using Kuestenlogik.Bowire;
 using Kuestenlogik.Bowire.Protocol.TacticalApi.Sample.Services;
@@ -73,6 +75,13 @@ builder.Services.AddBowire();
 builder.Services.AddBowireCatalogue(builder.Configuration);
 
 var app = builder.Build();
+
+// gRPC-Web on the HTTP/1.1 port, next to the workbench. Rheinmetall's TacNet
+// splits the same way — native gRPC on one port, gRPC-Web on another — because
+// gRPC-Web is what survives a proxy that will not carry h2c, and browsers
+// cannot speak cleartext HTTP/2 at all. With this the sample exercises both
+// sides of the plugin's `useGrpcWeb` setting (#67) rather than only the h2c one.
+app.UseGrpcWeb(new GrpcWebOptions { DefaultEnabled = true });
 
 app.MapGrpcService<SituationServiceImpl>();
 app.MapGrpcService<OwnPoseServiceImpl>();

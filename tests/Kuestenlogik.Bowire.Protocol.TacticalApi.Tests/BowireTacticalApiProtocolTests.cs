@@ -216,6 +216,51 @@ public sealed class BowireTacticalApiProtocolTests
     }
 
     [Fact]
+    public void Discover_OneofFields_SayOnlyOneMayBeSet()
+    {
+        // Straight from the descriptor, so it cannot drift from the protos:
+        // "Note: only one of the situation object types is supported at a time!"
+        var message = TacticalApiDescriptors.DescribeMessageForTests("UpdateSituationObject");
+
+        Assert.All(message.Fields, f =>
+            Assert.Contains("only one field in this group", f.Description ?? "", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Discover_TheWriteEnvelope_IsRequiredAndExplained()
+    {
+        var message = TacticalApiDescriptors.DescribeMessageForTests("UpdateSymbol");
+
+        var identity = message.Fields.Single(f => f.Name == "identity");
+        var reporter = message.Fields.Single(f => f.Name == "reporter");
+        var reportingTime = message.Fields.Single(f => f.Name == "reporting_time");
+
+        Assert.True(identity.Required);
+        Assert.True(reporter.Required);
+        Assert.True(reportingTime.Required);
+
+        // The wording carries the convention an operator cannot guess.
+        Assert.Contains("TacticalAPI", reporter.Description ?? "", StringComparison.Ordinal);
+        Assert.Contains("previous timestamp", reportingTime.Description ?? "", StringComparison.Ordinal);
+
+        // A read message must not pick up the rule.
+        var read = TacticalApiDescriptors.DescribeMessageForTests("GetSituationObjectsRequest");
+        Assert.DoesNotContain(read.Fields, f => f.Required);
+    }
+
+    [Fact]
+    public void Discover_UpdateProperties_CarryTheSparseUpdateRule()
+    {
+        // The one that protects data: a full object overwrites what the
+        // operator never meant to touch.
+        var message = TacticalApiDescriptors.DescribeMessageForTests("UpdatePropertyString");
+        var content = message.Fields.Single(f => f.Name == "content");
+
+        Assert.Contains("omit the whole property", content.Description ?? "", StringComparison.Ordinal);
+        Assert.Contains("clears the value", content.Description ?? "", StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task OpenChannel_ReturnsNull_BecauseTacticalApiHasNoDuplex()
     {
         var plugin = new BowireTacticalApiProtocol();

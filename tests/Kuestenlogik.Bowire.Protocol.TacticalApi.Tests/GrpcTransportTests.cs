@@ -90,6 +90,76 @@ public sealed class GrpcTransportTests
     }
 
     [Fact]
+    public void BuildChannelOptions_GrpcWebSetting_SwitchesHandlerAndHttpVersion()
+    {
+        // Rheinmetall's TacNet exposes gRPC-Web on its own port and their
+        // reference client defaults to it; before #67 this plugin could only
+        // speak native gRPC over HTTP/2.
+        var opts = GrpcTransport.BuildChannelOptions(new Dictionary<string, string>
+        {
+            [GrpcTransport.UseGrpcWebKey] = "true",
+        });
+
+        Assert.IsType<Grpc.Net.Client.Web.GrpcWebHandler>(opts.HttpHandler);
+        // The version has to move with the handler — gRPC-Web rides HTTP/1.1.
+        Assert.Equal(new Version(1, 1), opts.HttpVersion);
+    }
+
+    [Fact]
+    public void BuildChannelOptions_SharedGrpcWebMarker_SwitchesTheSameWay()
+    {
+        // The core appends this for a `grpcweb@` hint. Honouring it means a
+        // caller that already knows Bowire's vocabulary needs no second one.
+        var opts = GrpcTransport.BuildChannelOptions(new Dictionary<string, string>
+        {
+            [GrpcTransport.GrpcTransportMarkerKey] = "web",
+        });
+
+        Assert.IsType<Grpc.Net.Client.Web.GrpcWebHandler>(opts.HttpHandler);
+    }
+
+    [Fact]
+    public void BuildChannelOptions_WithoutGrpcWeb_StaysOnNativeGrpc()
+    {
+        // The default must not move: :4267 keeps working exactly as before.
+        var opts = GrpcTransport.BuildChannelOptions(new Dictionary<string, string>
+        {
+            [GrpcTransport.UseGrpcWebKey] = "false",
+        });
+
+        Assert.Null(opts.HttpHandler);
+        Assert.Null(opts.HttpVersion);
+    }
+
+    [Fact]
+    public void BuildChannelOptions_AllowSelfSignedCertsSetting_IsActuallyRead()
+    {
+        // The setting shipped in the plugin's settings surface and nothing
+        // consumed it, so the workbench toggle did nothing at all (#67).
+        var opts = GrpcTransport.BuildChannelOptions(new Dictionary<string, string>
+        {
+            [GrpcTransport.AllowSelfSignedCertsKey] = "true",
+        });
+
+        var handler = Assert.IsType<HttpClientHandler>(opts.HttpHandler);
+        Assert.NotNull(handler.ServerCertificateCustomValidationCallback);
+    }
+
+    [Fact]
+    public void IsTransportKey_CoversTheSettingsTheWorkbenchDelivers()
+    {
+        // Plugin settings configure this client. They carry no `_bowire:`
+        // prefix, so they were being forwarded to the server as gRPC headers —
+        // the same leak of configuration intent the prefixed keys are filtered
+        // for (#67).
+        Assert.True(GrpcTransport.IsTransportKey("invocationDeadlineSeconds"));
+        Assert.True(GrpcTransport.IsTransportKey("streamIdleSeconds"));
+        Assert.True(GrpcTransport.IsTransportKey(GrpcTransport.AllowSelfSignedCertsKey));
+        Assert.True(GrpcTransport.IsTransportKey(GrpcTransport.UseGrpcWebKey));
+        Assert.True(GrpcTransport.IsTransportKey(GrpcTransport.GrpcTransportMarkerKey));
+    }
+
+    [Fact]
     public void IsTransportKey_OnlyBowirePrefixIsTransport()
     {
         Assert.True(GrpcTransport.IsTransportKey(GrpcTransport.TlsSkipValidationKey));

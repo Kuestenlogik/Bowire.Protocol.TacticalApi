@@ -12,6 +12,14 @@
          downloads into obj/tacticalapi-protos/. Google.Protobuf
          is the runtime serializer the generated code calls into. -->
     <PackageVersion Include="Grpc.Net.Client" Version="2.83.0" />
+    <!-- gRPC-Web: Rheinmetall's TacNet exposes it on its own port (4268) and
+         their reference client defaults to it, because it is what survives
+         proxies that will not carry h2c (#67). -->
+    <PackageVersion Include="Grpc.Net.Client.Web" Version="2.83.0" />
+    <!-- Server side of the same thing, for the sample: it serves the three
+         services as gRPC-Web on its HTTP/1.1 port so both sides of the
+         plugin's useGrpcWeb setting are exercised (#67). -->
+    <PackageVersion Include="Grpc.AspNetCore.Web" Version="2.83.0" />
     <PackageVersion Include="Grpc.Tools" Version="2.83.0" />
     <PackageVersion Include="Google.Protobuf" Version="3.36.1" />
 

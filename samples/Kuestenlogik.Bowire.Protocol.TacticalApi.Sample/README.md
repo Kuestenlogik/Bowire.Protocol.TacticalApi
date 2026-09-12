@@ -69,7 +69,33 @@ seeded forces are picked to make the difference visible:
 Two behaviours are worth driving from the workbench:
 
 - **One write moves three things.** Call `OwnPose` → `UpdatePosition`
-  with a coordinate. The own pose reports it, `Gecko 21` reports it, and
+  with a coordinate &mdash; the envelope the contract expects, not just the
+  numbers:
+
+  ```json
+  {
+    "position": {
+      "sourceIdentifier": "Api",
+      "pointLocation": {
+        "locationTime": "2026-09-12T10:15:00Z",
+        "geoPoint": {
+          "latitudeCoordinate": 54.52,
+          "longitudeCoordinate": 9.91,
+          "measurementCode": "ESTIMATE"
+        }
+      }
+    }
+  }
+  ```
+
+  `sourceIdentifier` names the system reporting the fix, `locationTime` is when
+  the fix was taken (not when it was reported), and `measurementCode` says how
+  &mdash; `GPS` for a tracked position, `ESTIMATE` for a derived one. Leave
+  `sourceIdentifier` out and this server refuses the write the way a real one
+  does: gRPC answers `OK`, the response header carries `success = false`, and
+  Bowire reports `tacticalapi:refused`. That is the path worth seeing once.
+
+  The own pose reports it, `Gecko 21` reports it, and
   `Kiebitz 1` — bolted to Gecko 21 — reports it too. A client that draws
   `mount_host` as a relationship and one that draws two unrelated dots
   both look right until this call; then only one of them stays right. A
@@ -77,7 +103,32 @@ Two behaviours are worth driving from the workbench:
   `is_invalid_or_expired` after 30 s, which is what the schema says
   should happen to a stale GNSS position.
 - **A blue force you add expires.** Call `BlueForceTracking` →
-  `AddOrUpdateBlueForces` with a new identity. It appears in the open
+  `AddOrUpdateBlueForces` with a new identity &mdash; `string_identity` is the
+  right form here, and `lastContactTime` is what the keep-alive contract reads:
+
+  ```json
+  {
+    "blueForcesToUpdates": [
+      {
+        "identity": { "stringIdentity": "sample-uav-9" },
+        "callsign": "Kiebitz 9",
+        "lastContactTime": "2026-09-12T10:15:00Z",
+        "blueForceType": { "isUnmanned": true },
+        "symbol": { "symbolCatalog": "MIL_2525C", "stringIdentifier": "SFAPMH----****" },
+        "pointLocation": {
+          "locationTime": "2026-09-12T10:15:00Z",
+          "geoPoint": {
+            "latitudeCoordinate": 54.33,
+            "longitudeCoordinate": 10.14,
+            "measurementCode": "GPS"
+          }
+        }
+      }
+    ]
+  }
+  ```
+
+  It appears in the open
   subscription at once. Leave it alone for 30 s and it comes back one
   last time with `is_deleted` set, then disappears from `GetBlueForces` —
   the upstream keep-alive contract. The seeded four are re-stamped every

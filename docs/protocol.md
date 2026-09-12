@@ -72,9 +72,51 @@ TacticalAPI servers in production almost always run behind mTLS. The plugin read
 
 Set both via the workbench's metadata panel before clicking **Execute**, or via `--metadata _bowire:client-cert-pfx=...` from the CLI.
 
-### Pairing with the gRPC plugin's gRPC-Web transport
+### Writing to TacticalAPI
 
-TacticalAPI servers commonly expose **two ports**: a native HTTP/2 gRPC endpoint (typically `:4267`) and a gRPC-Web endpoint (typically `:4268`) for browser-fronted clients. Bowire's [gRPC plugin](grpc.md#grpc-web-transport) speaks both — point at the native port for full bidirectional access, or at the gRPC-Web port behind an L7 proxy. Discovery works against either transport because the proto schema is bundled, not fetched at connect time.
+Every write carries the same envelope, and the contract marks all three fields
+`Required:` on every update and delete message &mdash; `UpdateSymbol`,
+`UpdateActionTask`, `DeleteSituationObject` and the rest. Bowire surfaces them
+as required in the invoke form (since #68), but the conventions behind them are
+not guessable:
+
+| Field | What to send |
+| --- | --- |
+| `identity` | The object's own id. A fresh UUID when creating a symbol; the existing one when updating it. `string_identity` is the shorter form for low-bandwidth links; `int32_identity` / `int64_identity` are reserved for internal use and must not be used to create objects. |
+| `reporter` | Who generated the change. Use the value Rheinmetall gave you &mdash; **`TacticalAPI`** if you have none. |
+| `reporting_time` | UTC time of the change. Only the most up-to-date information is considered, so use the current time for a real change &mdash; but **keep the previous timestamp when nothing changed**, or you will re-date an unchanged object. |
+
+Two more rules that cost data rather than time when missed:
+
+- **Updates are sparse.** An `Update…` message changes only the properties you
+  send. Omit a property entirely to leave it untouched; send the property with
+  no `content` to clear the value. Sending a complete object is a legitimate
+  request that overwrites everything the operator never meant to touch.
+- **A position needs its own time and quality.** `Point.location_time` is the
+  time of the fix, not of the report, and `GeoPoint.measurement_code` says how
+  it was obtained &mdash; `GPS` for a tracked position, `ESTIMATE` for a
+  derived one. Upstream's reference client sets both on every position it
+  sends, and `OwnPose.UpdatePosition` additionally names its
+  `source_identifier` (the system reporting the fix).
+
+**A refused write is not a transport error.** TacticalAPI answers a rejected
+operation with an ordinary gRPC `OK` whose `ResponseHeader` carries
+`success = false` and an `error_message`. Bowire reads that header and reports
+the call as `tacticalapi:refused` with the server's wording in the response
+metadata (#66) &mdash; for unary calls and for every streamed frame, which is
+what upstream's own client does. A server that fills no header at all is
+treated as success, so older or partial implementations keep working.
+
+### Two ports: native gRPC and gRPC-Web
+
+TacticalAPI servers commonly expose **two ports**: a native HTTP/2 gRPC endpoint (typically `:4267`) and a gRPC-Web endpoint over HTTP/1.1 (typically `:4268`). Rheinmetall's own reference client defaults to the gRPC-Web one, because it is what survives a proxy or load balancer that will not carry h2c.
+
+This plugin speaks both (#67). Native gRPC is the default; switch the wire with either of:
+
+- the plugin setting **`useGrpcWeb`** (Settings → TacticalAPI), or
+- the shared `__bowireGrpcTransport=web` marker in the call metadata — the same marker the core appends for the core gRPC plugin's `grpcweb@` hint, so a caller that already knows that vocabulary needs no second one.
+
+Discovery works over either transport regardless, because the proto schema is bundled rather than fetched at connect time. Server-streaming works over gRPC-Web too; what gRPC-Web cannot carry is client-streaming and duplex, and the TacticalAPI surface has neither.
 
 ## Licensing &mdash; please read
 

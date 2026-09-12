@@ -10,6 +10,7 @@
   <ItemGroup>
     <PackageReference Include="Kuestenlogik.Bowire" />
     <PackageReference Include="Grpc.Net.Client" />
+    <PackageReference Include="Grpc.Net.Client.Web" />
     <PackageReference Include="Google.Protobuf" />
     <PackageReference Include="Grpc.Tools">
       <PrivateAssets>all</PrivateAssets>

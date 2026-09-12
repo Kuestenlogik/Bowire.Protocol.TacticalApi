@@ -1,6 +1,8 @@
 // Copyright 2026 Küstenlogik
 // SPDX-License-Identifier: Apache-2.0
 
+using Rheinmetall.TacticalApi.V0;
+
 namespace Kuestenlogik.Bowire.Protocol.TacticalApi.Tests.Integration;
 
 /// <summary>
@@ -46,6 +48,77 @@ public sealed class TacticalApiRoundTripE2ETests : IClassFixture<InProcessTactic
 
         Assert.Equal("OK", result.Status);
         Assert.Contains("test-uuid-1", result.Response, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Invoke_refusal_in_the_response_header_reports_a_non_ok_status()
+    {
+        var plugin = new BowireTacticalApiProtocol();
+        var ct = TestContext.Current.CancellationToken;
+
+        // An empty source_identifier is refused by the fixture the way a
+        // TacticalAPI server refuses: gRPC says OK, the header says no. Before
+        // #66 this came back as Status "OK" with the reason buried in the body.
+        var result = await plugin.InvokeAsync(
+            _server.ServerUrl.Replace("http://", "grpc://", StringComparison.Ordinal),
+            "OwnPose", "UpdatePosition",
+            jsonMessages: ["{}"], showInternalServices: false,
+            metadata: null, ct: ct);
+
+        Assert.Equal(BowireTacticalApiProtocol.RefusedStatus, result.Status);
+
+        // The wording the server chose is surfaced, not hunted for …
+        Assert.Equal(
+            IntegrationOwnPoseService.RefusalMessage,
+            result.Metadata[BowireTacticalApiProtocol.RefusalMessageKey]);
+
+        // … and the body is still the response, because a refusal's payload is
+        // what an operator reads next. Asserted on the message rather than on
+        // "success": protobuf's JSON formatter omits default values, so a
+        // refusal's header serialises as the error_message alone.
+        Assert.Contains(
+            IntegrationOwnPoseService.RefusalMessage, result.Response, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task InvokeStream_refusing_frame_ends_the_pump_as_an_error()
+    {
+        var plugin = new BowireTacticalApiProtocol();
+        var ct = TestContext.Current.CancellationToken;
+
+        var frames = new List<string>();
+        await foreach (var frame in plugin.InvokeStreamAsync(
+            _server.ServerUrl.Replace("http://", "grpc://", StringComparison.Ordinal),
+            "OwnPose", "SubscribePositionChangedEvents",
+            jsonMessages: ["{}"], showInternalServices: false,
+            metadata: new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [IntegrationOwnPoseService.RefuseHeader] = "1",
+            },
+            ct: ct).ConfigureAwait(false))
+        {
+            frames.Add(frame);
+        }
+
+        // One frame, and it says error rather than looking like a position.
+        var single = Assert.Single(frames);
+        Assert.Contains(BowireTacticalApiProtocol.RefusedStatus, single, StringComparison.Ordinal);
+        Assert.Contains(
+            IntegrationOwnPoseService.RefusalMessage,
+            single, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ReadRefusal_treats_a_response_without_a_header_as_success()
+    {
+        // Not every message in the contract embeds ResponseHeader, and a
+        // partial server may leave it unset. Neither case may start reporting
+        // failures — the check has to be additive.
+        var noHeader = new GeoPoint { LatitudeCoordinate = 54.44, LongitudeCoordinate = 9.80 };
+        var headerUnset = new GetPositionResponse();
+
+        Assert.False(BowireTacticalApiProtocol.ReadRefusal(noHeader).Refused);
+        Assert.False(BowireTacticalApiProtocol.ReadRefusal(headerUnset).Refused);
     }
 
     [Fact]
@@ -138,6 +211,12 @@ public sealed class TacticalApiRoundTripE2ETests : IClassFixture<InProcessTactic
 
         Assert.Equal("OK", write.Status);
         Assert.Contains("true", write.Response, StringComparison.Ordinal); // header.success
+
+        // The header check must not turn a good write into a failure, and must
+        // leave no refusal trace behind (#66). Asserted here rather than in a
+        // [Fact] of its own: the fixture's position is one mutable cell, and a
+        // second writer would be asserting against this test's leftovers.
+        Assert.DoesNotContain(BowireTacticalApiProtocol.RefusalMessageKey, write.Metadata.Keys);
 
         var after = await plugin.InvokeAsync(
             url, "OwnPose", "GetPosition",

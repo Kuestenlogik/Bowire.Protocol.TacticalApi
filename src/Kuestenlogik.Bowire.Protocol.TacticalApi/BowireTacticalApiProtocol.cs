@@ -44,6 +44,7 @@ public sealed class BowireTacticalApiProtocol : IBowireProtocol
     internal const int DefaultInvocationDeadlineSeconds = 0;
     internal const int DefaultStreamIdleSeconds = 0;
     internal const bool DefaultAllowSelfSignedCerts = false;
+    internal const bool DefaultUseGrpcWeb = false;
 
     /// <inheritdoc />
     public string Name => DisplayName;
@@ -63,6 +64,12 @@ public sealed class BowireTacticalApiProtocol : IBowireProtocol
         new("allowSelfSignedCerts", "Allow self-signed certs",
             "Skip the server certificate chain validation. Off by default. The shared `__bowireMtls__` marker overrides this per-call when present.",
             "bool", DefaultAllowSelfSignedCerts),
+        new("useGrpcWeb", "Speak gRPC-Web",
+            "Send calls as gRPC-Web over HTTP/1.1 instead of native gRPC over HTTP/2. "
+            + "TacticalAPI servers commonly expose both — Rheinmetall's TacNet uses :4267 for native gRPC "
+            + "and :4268 for gRPC-Web — and gRPC-Web is what survives a proxy that will not carry h2c. "
+            + "Off by default.",
+            "bool", DefaultUseGrpcWeb),
     ];
 
     /// <inheritdoc />
@@ -228,11 +235,23 @@ public sealed class BowireTacticalApiProtocol : IBowireProtocol
             var responseMessage = methodDesc.OutputType.Parser.ParseFrom(responseBytes);
             var responseJson = JsonFormatter.Default.Format(responseMessage);
 
+            // The server answered; whether it agreed is in the header (#66).
+            // The body stays the response — a refusal's payload is what the
+            // operator needs to read — and the refusal's own wording goes into
+            // metadata, where it is visible without being hunted for.
+            var (refused, refusalMessage) = ReadRefusal(responseMessage);
+            var responseMetadata = new Dictionary<string, string>(StringComparer.Ordinal);
+            if (refused)
+            {
+                responseMetadata[RefusalMessageKey] =
+                    refusalMessage ?? "The server set success = false without an error_message.";
+            }
+
             return new InvokeResult(
                 Response: responseJson,
                 DurationMs: sw.ElapsedMilliseconds,
-                Status: "OK",
-                Metadata: new Dictionary<string, string>(StringComparer.Ordinal),
+                Status: refused ? RefusedStatus : "OK",
+                Metadata: responseMetadata,
                 ResponseBinary: responseBytes);
         }
         catch (RpcException ex)
@@ -267,6 +286,51 @@ public sealed class BowireTacticalApiProtocol : IBowireProtocol
             headers.Add(key, value);
         }
         return headers;
+    }
+
+    /// <summary>Status reported when the server answered, and refused.</summary>
+    internal const string RefusedStatus = "tacticalapi:refused";
+
+    /// <summary>Metadata key carrying the refusal's own wording.</summary>
+    internal const string RefusalMessageKey = "_tacticalapi:errorMessage";
+
+    /// <summary>
+    /// Read the <c>ResponseHeader</c> every TacticalAPI response embeds, and
+    /// report whether the server refused the operation.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <c>service_types.proto</c> calls <c>ResponseHeader</c> the "Base class
+    /// for responses": <c>success</c> plus an optional <c>error_message</c>.
+    /// A refusal is an ordinary gRPC success — status OK, a parseable body —
+    /// so reading only the transport outcome reports "symbol not found" as a
+    /// green call with the reason buried in the payload (#66). Rheinmetall's
+    /// own reference client treats the header as the outcome and throws on it,
+    /// per unary reply and per streamed frame.
+    /// </para>
+    /// <para>
+    /// Read by descriptor rather than by generated type, because this plugin
+    /// dispatches over <c>Method&lt;byte[], byte[]&gt;</c> and never holds a
+    /// concrete response class. A response with no <c>header</c> field, or one
+    /// the server left unset, counts as success: the contract's older services
+    /// and any partial implementation must not start reporting failures.
+    /// </para>
+    /// </remarks>
+    internal static (bool Refused, string? Message) ReadRefusal(IMessage response)
+    {
+        if (response.Descriptor.FindFieldByName("header") is not { FieldType: FieldType.Message } headerField)
+            return (false, null);
+        if (headerField.Accessor.GetValue(response) is not IMessage header)
+            return (false, null);
+        if (header.Descriptor.FindFieldByName("success") is not { FieldType: FieldType.Bool } successField)
+            return (false, null);
+        if (successField.Accessor.GetValue(header) is not false)
+            return (false, null);
+
+        // error_message is a StringValue wrapper, which protobuf's reflection
+        // surfaces as the unwrapped string (null when the server left it out).
+        var message = header.Descriptor.FindFieldByName("error_message")?.Accessor.GetValue(header) as string;
+        return (true, string.IsNullOrWhiteSpace(message) ? null : message);
     }
 
     private static InvokeResult ErrorResult(string message, string status) =>
@@ -373,7 +437,24 @@ public sealed class BowireTacticalApiProtocol : IBowireProtocol
         {
             var responseBytes = call.ResponseStream.Current;
             var responseMessage = methodDesc.OutputType.Parser.ParseFrom(responseBytes);
-            yield return JsonFormatter.Default.Format(responseMessage);
+            var frameJson = JsonFormatter.Default.Format(responseMessage);
+
+            // Every frame carries its own header, and upstream's reference
+            // client checks each one and throws (#66). So a refusal ends the
+            // pump rather than flowing on as data: a subscription whose server
+            // says "no" is not delivering a situation picture any more, and a
+            // frame that merely looks like data would be read as one.
+            var (refused, refusalMessage) = ReadRefusal(responseMessage);
+            if (refused)
+            {
+                var detail = refusalMessage ?? "The server set success = false without an error_message.";
+                yield return $$"""
+                    { "error": {{System.Text.Json.JsonSerializer.Serialize(detail)}}, "status": "{{RefusedStatus}}", "frame": {{frameJson}} }
+                    """;
+                yield break;
+            }
+
+            yield return frameJson;
         }
     }
 
