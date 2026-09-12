@@ -16,11 +16,11 @@ namespace Kuestenlogik.Bowire.Protocol.TacticalApi.Tests.Integration;
 /// loopback, real gRPC channel, full descriptor roundtrip).
 /// </remarks>
 [Trait("Category", "Integration")]
-public sealed class TacticalApiRoundTripE2ETests : IClassFixture<InProcessSituationServerFixture>
+public sealed class TacticalApiRoundTripE2ETests : IClassFixture<InProcessTacticalApiServerFixture>
 {
-    private readonly InProcessSituationServerFixture _server;
+    private readonly InProcessTacticalApiServerFixture _server;
 
-    public TacticalApiRoundTripE2ETests(InProcessSituationServerFixture server)
+    public TacticalApiRoundTripE2ETests(InProcessTacticalApiServerFixture server)
     {
         _server = server;
     }
@@ -92,4 +92,166 @@ public sealed class TacticalApiRoundTripE2ETests : IClassFixture<InProcessSituat
 
         Assert.Equal("OK", result.Status);
     }
+
+    [Fact]
+    public async Task Invoke_OwnPose_reads_the_seed_then_reflects_a_write()
+    {
+        // Read, write, read — in one test rather than three, because the
+        // fixture's position is a single mutable cell: split across
+        // [Fact]s, whichever ran second would be asserting against the
+        // other one's leftovers.
+        var plugin = new BowireTacticalApiProtocol();
+        var ct = TestContext.Current.CancellationToken;
+        var url = GrpcUrl();
+
+        var before = await plugin.InvokeAsync(
+            url, "OwnPose", "GetPosition",
+            jsonMessages: ["{}"], showInternalServices: false,
+            metadata: null, ct: ct);
+
+        Assert.Equal("OK", before.Status);
+        Assert.Contains(
+            IntegrationOwnPoseService.SeedSource, before.Response, StringComparison.Ordinal);
+
+        // The write RPC the Situation service has no equivalent for. The
+        // request is a nested message, so this also covers JsonParser
+        // descending past the top level on the way to the wire.
+        var write = await plugin.InvokeAsync(
+            url, "OwnPose", "UpdatePosition",
+            jsonMessages:
+            [
+                """
+                {
+                  "position": {
+                    "sourceIdentifier": "e2e-writer",
+                    "pointLocation": {
+                      "geoPoint": {
+                        "latitudeCoordinate": 54.52,
+                        "longitudeCoordinate": 9.91
+                      }
+                    }
+                  }
+                }
+                """,
+            ],
+            showInternalServices: false, metadata: null, ct: ct);
+
+        Assert.Equal("OK", write.Status);
+        Assert.Contains("true", write.Response, StringComparison.Ordinal); // header.success
+
+        var after = await plugin.InvokeAsync(
+            url, "OwnPose", "GetPosition",
+            jsonMessages: ["{}"], showInternalServices: false,
+            metadata: null, ct: ct);
+
+        Assert.Equal("OK", after.Status);
+        Assert.Contains("e2e-writer", after.Response, StringComparison.Ordinal);
+        Assert.Contains("54.52", after.Response, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task InvokeStream_SubscribePositionChangedEvents_yields_frames()
+    {
+        var plugin = new BowireTacticalApiProtocol();
+        var ct = TestContext.Current.CancellationToken;
+
+        var frames = new List<string>();
+        await foreach (var frame in plugin.InvokeStreamAsync(
+            GrpcUrl(), "OwnPose", "SubscribePositionChangedEvents",
+            jsonMessages: ["{}"], showInternalServices: false,
+            metadata: null, ct: ct).ConfigureAwait(false))
+        {
+            frames.Add(frame);
+            if (frames.Count >= 2) break;
+        }
+
+        Assert.Equal(2, frames.Count);
+        Assert.Contains("pose-frame-0", frames[0], StringComparison.Ordinal);
+        Assert.Contains("pose-frame-1", frames[1], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Invoke_GetBlueForces_round_trips_through_plugin()
+    {
+        var plugin = new BowireTacticalApiProtocol();
+        var ct = TestContext.Current.CancellationToken;
+
+        var result = await plugin.InvokeAsync(
+            GrpcUrl(), "BlueForceTracking", "GetBlueForces",
+            jsonMessages: ["{}"], showInternalServices: false,
+            metadata: null, ct: ct);
+
+        Assert.Equal("OK", result.Status);
+        Assert.Contains(
+            IntegrationBlueForceTrackingService.SeedCallsign,
+            result.Response, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Invoke_AddOrUpdateBlueForces_lands_in_the_next_read()
+    {
+        // A repeated field of nested messages — the shape most likely to
+        // be mangled between the workbench's JSON and the wire, and the
+        // one the sidebar renders as a list form.
+        var plugin = new BowireTacticalApiProtocol();
+        var ct = TestContext.Current.CancellationToken;
+        var url = GrpcUrl();
+
+        var write = await plugin.InvokeAsync(
+            url, "BlueForceTracking", "AddOrUpdateBlueForces",
+            jsonMessages:
+            [
+                """
+                {
+                  "blueForcesToUpdates": [
+                    {
+                      "identity": { "stringIdentity": "bf-e2e-1" },
+                      "callsign": "Testfalke",
+                      "blueForceType": { "isUnmanned": true }
+                    }
+                  ]
+                }
+                """,
+            ],
+            showInternalServices: false, metadata: null, ct: ct);
+
+        Assert.Equal("OK", write.Status);
+
+        var read = await plugin.InvokeAsync(
+            url, "BlueForceTracking", "GetBlueForces",
+            jsonMessages: ["{}"], showInternalServices: false,
+            metadata: null, ct: ct);
+
+        Assert.Equal("OK", read.Status);
+        Assert.Contains("Testfalke", read.Response, StringComparison.Ordinal);
+        Assert.Contains("bf-e2e-1", read.Response, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task InvokeStream_SubscribeBlueForceEvents_yields_frames()
+    {
+        var plugin = new BowireTacticalApiProtocol();
+        var ct = TestContext.Current.CancellationToken;
+
+        var frames = new List<string>();
+        await foreach (var frame in plugin.InvokeStreamAsync(
+            GrpcUrl(), "BlueForceTracking", "SubscribeBlueForceEvents",
+            jsonMessages: ["{}"], showInternalServices: false,
+            metadata: null, ct: ct).ConfigureAwait(false))
+        {
+            frames.Add(frame);
+            if (frames.Count >= 2) break;
+        }
+
+        Assert.Equal(2, frames.Count);
+        Assert.Contains("bf-frame-0", frames[0], StringComparison.Ordinal);
+        Assert.Contains("bf-frame-1", frames[1], StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The fixture's loopback address in the shape the workbench feeds
+    /// the plugin — grpc:// so the URL normaliser is exercised too.
+    /// </summary>
+    private string GrpcUrl() =>
+        _server.ServerUrl.Replace("http://", "grpc://", StringComparison.Ordinal);
 }

@@ -26,7 +26,11 @@ public sealed class BowireTacticalApiProtocolInvokeTests
 
         Assert.Equal("not-found", result.Status);
         Assert.Contains("UnknownService", result.Response, StringComparison.Ordinal);
-        Assert.Contains("Situation", result.Response, StringComparison.Ordinal); // tells caller which services are real
+        // Tells the caller which services are real — all of them, not
+        // just the first .proto the plugin happens to look at.
+        Assert.Contains("Situation", result.Response, StringComparison.Ordinal);
+        Assert.Contains("OwnPose", result.Response, StringComparison.Ordinal);
+        Assert.Contains("BlueForceTracking", result.Response, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -173,5 +177,77 @@ public sealed class BowireTacticalApiProtocolInvokeTests
         var only = Assert.Single(frames);
         Assert.Contains("error", only, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("rheinmetall.tactical_api.v0", only, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Invoke_UnknownMethodOnBlueForceTracking_ReturnsNotFound()
+    {
+        // Resolution has to descend into the right service: the method
+        // named here exists on OwnPose, not on BlueForceTracking, so a
+        // resolver that searched every service's methods flat would
+        // wrongly accept it.
+        var plugin = new BowireTacticalApiProtocol();
+
+        var result = await plugin.InvokeAsync(
+            Url, "BlueForceTracking", "GetPosition",
+            jsonMessages: ["{}"], showInternalServices: false,
+            metadata: null, ct: TestContext.Current.CancellationToken);
+
+        Assert.Equal("not-found", result.Status);
+        Assert.Contains("GetBlueForces", result.Response, StringComparison.Ordinal);
+        Assert.Contains("AddOrUpdateBlueForces", result.Response, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Invoke_SubscribePositionChangedEventsOnUnary_ReturnsWrongShape()
+    {
+        // Same shape-check as Situation's subscribe pump, on the service
+        // that arrived with the position / blue-force upstream commit.
+        var plugin = new BowireTacticalApiProtocol();
+
+        var result = await plugin.InvokeAsync(
+            Url, "OwnPose", "SubscribePositionChangedEvents",
+            jsonMessages: ["{}"], showInternalServices: false,
+            metadata: null, ct: TestContext.Current.CancellationToken);
+
+        Assert.Equal("wrong-method-shape", result.Status);
+        Assert.Contains("streaming", result.Response, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Invoke_MalformedJsonForUpdatePosition_NamesTheRequestType()
+    {
+        var plugin = new BowireTacticalApiProtocol();
+
+        var result = await plugin.InvokeAsync(
+            Url, "OwnPose", "UpdatePosition",
+            jsonMessages: ["{ still not json"], showInternalServices: false,
+            metadata: null, ct: TestContext.Current.CancellationToken);
+
+        Assert.Equal("bad-request", result.Status);
+        Assert.Contains(
+            "rheinmetall.tactical_api.v0.UpdatePositionRequest",
+            result.Response, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task InvokeStream_AddOrUpdateBlueForces_YieldsErrorAndStops()
+    {
+        // Unary method on the streaming entry point — the mirror of
+        // Invoke_SubscribePositionChangedEventsOnUnary.
+        var plugin = new BowireTacticalApiProtocol();
+
+        var frames = new List<string>();
+        await foreach (var frame in plugin.InvokeStreamAsync(
+            Url, "BlueForceTracking", "AddOrUpdateBlueForces",
+            jsonMessages: ["{}"], showInternalServices: false,
+            metadata: null, ct: TestContext.Current.CancellationToken))
+        {
+            frames.Add(frame);
+        }
+
+        var only = Assert.Single(frames);
+        Assert.Contains("error", only, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("unary", only, StringComparison.OrdinalIgnoreCase);
     }
 }

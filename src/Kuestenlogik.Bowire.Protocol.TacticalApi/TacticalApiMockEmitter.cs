@@ -26,20 +26,24 @@ namespace Kuestenlogik.Bowire.Protocol.TacticalApi;
 /// What replays:
 /// </para>
 /// <list type="bullet">
-///   <item>Unary steps (the typed <c>Get/AddOrUpdate/Delete</c> RPCs on
-///   the <c>Situation</c> service) call the matching method through the
-///   bundled descriptors. The response is logged, not redirected
-///   anywhere — the point is "produce realistic traffic against the
-///   target".</item>
-///   <item>Server-streaming steps (the <c>SubscribeSituationObjectEvents</c>
-///   pump) open the stream but consume frames silently. Useful when the
-///   replay timeline wants to hold a subscription open between unary
+///   <item>Unary steps (the typed <c>Get</c> / <c>AddOrUpdate</c> /
+///   <c>Delete</c> / <c>UpdatePosition</c> RPCs across <c>Situation</c>,
+///   <c>OwnPose</c> and <c>BlueForceTracking</c>) call the matching method
+///   through the bundled descriptors. The response is logged, not
+///   redirected anywhere — the point is "produce realistic traffic against
+///   the target".</item>
+///   <item>Server-streaming steps (the three <c>Subscribe…</c> pumps) open
+///   the stream but consume frames silently. Useful when the replay
+///   timeline wants to hold a subscription open between unary
 ///   calls.</item>
 /// </list>
 /// <para>
 /// Out of scope (matches the live plugin's contract): client-streaming
 /// and duplex aren't part of the TacticalAPI .proto surface, so steps
-/// tagged that way log a warning and are skipped.
+/// tagged that way log a warning and are skipped. Which services exist
+/// is <see cref="TacticalApiDescriptors.ServiceFiles"/>' business, not
+/// this emitter's — a new upstream service replays without a change
+/// here.
 /// </para>
 /// </remarks>
 public sealed class TacticalApiMockEmitter : IBowireMockEmitter
