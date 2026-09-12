@@ -74,25 +74,70 @@ public sealed class BowireTacticalApiProtocol : IBowireProtocol
         """<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/><path d="M12 12 L20 6"/></svg>""";
 
     /// <inheritdoc />
+    /// <remarks>
+    /// The hint-less overload can only answer "nothing": this plugin
+    /// discovers from a bundled schema rather than from the wire, so with no
+    /// way to tell whether it was asked for it has nothing safe to return.
+    /// Everything happens in the metadata overload below.
+    /// </remarks>
     public Task<List<BowireServiceInfo>> DiscoverAsync(
         string serverUrl, bool showInternalServices, CancellationToken ct = default)
+        => DiscoverAsync(serverUrl, showInternalServices, null, ct);
+
+    /// <summary>
+    /// Was this plugin the one the caller asked for — by the shared marker the
+    /// core merges in, or by a <c>tacticalapi@</c> prefix the core left on the
+    /// URL because its hint parser did not recognise it?
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The marker is the path that matters. The gate used to test the URL for
+    /// the prefix alone, and that condition can never be true for a hinted
+    /// URL: the discovery endpoint runs <see cref="BowireServerUrl.Parse"/>
+    /// first, which splits the hint off, pins the probe to this plugin and
+    /// hands <c>DiscoverAsync</c> the bare URL. So discovery answered "no
+    /// services" on every path, including the one this repo's own sample
+    /// depends on, and nothing failed loudly (#61).
+    /// </para>
+    /// <para>
+    /// The prefix check stays as the second half, and it is not a duplicate
+    /// truth: <c>Parse</c> only treats <c>hint@rest</c> as a hint when
+    /// <c>rest</c> carries a <c>://</c> scheme, so the documented
+    /// <c>tacticalapi@host:port</c> shape — the one in this repo's README, and
+    /// the one <see cref="GrpcTransport"/> normalises for invoke — reaches
+    /// the plugin with the prefix still attached and no marker anywhere. The
+    /// two branches cover the two ways the operator's intent survives, and
+    /// neither of them fires for a URL that never named this plugin.
+    /// </para>
+    /// </remarks>
+    private static bool WasAskedFor(
+        string serverUrl, IReadOnlyDictionary<string, string>? metadata)
+        => (metadata is not null
+                && metadata.TryGetValue(BowireMetadataKeys.PluginHint, out var pinned)
+                && string.Equals(pinned, ProtocolId, StringComparison.OrdinalIgnoreCase))
+            || serverUrl.StartsWith($"{ProtocolId}@", StringComparison.OrdinalIgnoreCase);
+
+    /// <inheritdoc />
+    public Task<List<BowireServiceInfo>> DiscoverAsync(
+        string serverUrl, bool showInternalServices,
+        IReadOnlyDictionary<string, string>? metadata, CancellationToken ct = default)
     {
-        // Gate on the `tacticalapi@` scheme prefix — otherwise the
-        // bundled services leaked into every added source URL
-        // (Petstore, custom REST APIs, arbitrary gRPC endpoints), which
-        // let the operator "call" a service that isn't on the wire +
-        // hit HTTP 464 when the gRPC request landed on a plain-REST
-        // backend. Operator: 'when using the template
-        // petstore3.swagger.io as source, i get also situation service
-        // with method list, e.g. GetSituationObjects. when calling this
-        // i get Bad gRPC response. HTTP status code: 464.'
+        // The gate itself stays: without one the bundled services leaked into
+        // every added source URL (Petstore, custom REST APIs, arbitrary gRPC
+        // endpoints), which let the operator "call" a service that isn't on
+        // the wire and hit HTTP 464 when the gRPC request landed on a
+        // plain-REST backend. Operator: 'when using the template
+        // petstore3.swagger.io as source, i get also situation service with
+        // method list, e.g. GetSituationObjects. when calling this i get Bad
+        // gRPC response. HTTP status code: 464.'
         //
-        // With the gate: only `tacticalapi@grpc://…` (or `tacticalapi@`
-        // for the sample's default port) surfaces the bundled
-        // descriptors. Plain `grpc://…` still discovers via Server
-        // Reflection through the core gRPC plugin.
-        if (string.IsNullOrWhiteSpace(serverUrl)
-            || !serverUrl.StartsWith("tacticalapi@", StringComparison.OrdinalIgnoreCase))
+        // With the gate: only a URL that named this plugin —
+        // `tacticalapi@http://host:port` through the core's hint parser, or
+        // the bare `tacticalapi@host:port` shape it leaves alone — surfaces
+        // the bundled descriptors. Plain `grpc://…` still discovers via
+        // Server Reflection through the core gRPC plugin, and the hint-less
+        // all-plugins fan-out gets nothing from here at all.
+        if (string.IsNullOrWhiteSpace(serverUrl) || !WasAskedFor(serverUrl, metadata))
         {
             return Task.FromResult(new List<BowireServiceInfo>());
         }
