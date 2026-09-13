@@ -1,7 +1,6 @@
 // Copyright 2026 Küstenlogik
 // SPDX-License-Identifier: Apache-2.0
 
-using System.Globalization;
 using Google.Protobuf.WellKnownTypes;
 using Grpc.Core;
 using Rheinmetall.TacticalApi.V0;
@@ -63,7 +62,7 @@ internal sealed class BlueForceTrackingServiceImpl(OwnPlatform platform)
         {
             foreach (var update in request.BlueForcesToUpdates)
             {
-                var key = KeyOf(update.Identity);
+                var key = IdentityKeys.Of(update.Identity);
                 if (key.Length == 0) continue;
 
                 // "All fields must be filled in every call" upstream, so
@@ -151,7 +150,7 @@ internal sealed class BlueForceTrackingServiceImpl(OwnPlatform platform)
         }
         foreach (var gone in expired)
         {
-            _reported.Remove(KeyOf(gone.Identity));
+            _reported.Remove(IdentityKeys.Of(gone.Identity));
         }
         return expired;
     }
@@ -179,7 +178,7 @@ internal sealed class BlueForceTrackingServiceImpl(OwnPlatform platform)
         }
         foreach (var entry in reported)
         {
-            byKey[KeyOf(entry.Force.Identity)] = entry.Force;
+            byKey[IdentityKeys.Of(entry.Force.Identity)] = entry.Force;
         }
         return [.. byKey.Values];
     }
@@ -224,8 +223,10 @@ internal sealed class BlueForceTrackingServiceImpl(OwnPlatform platform)
 
     private static Point Locate(TrackMotion motion, double elapsedSeconds)
     {
+        // A force on its own leg reports a receiver fix, not an estimate —
+        // the code upstream's reference client puts on a tracked blue force.
         var (latitude, longitude) = motion.At(elapsedSeconds);
-        return OwnPlatform.NewPoint(latitude, longitude);
+        return OwnPlatform.NewPoint(latitude, longitude, MeasurementCode.Gps);
     }
 
     /// <summary>
@@ -244,22 +245,6 @@ internal sealed class BlueForceTrackingServiceImpl(OwnPlatform platform)
             PointLocation = update.PointLocation,
             MountHost = update.MountHost,
         };
-
-    /// <summary>
-    /// Flatten the identity oneof into a dictionary key. Two forces with
-    /// the same digits in different identity types are different forces,
-    /// so the case is part of the key.
-    /// </summary>
-    private static string KeyOf(Identity? identity) => identity?.TypeCase switch
-    {
-        Identity.TypeOneofCase.UuidIdentity => "uuid:" + identity.UuidIdentity,
-        Identity.TypeOneofCase.StringIdentity => "str:" + identity.StringIdentity,
-        Identity.TypeOneofCase.Int32Identity =>
-            "i32:" + identity.Int32Identity.ToString(CultureInfo.InvariantCulture),
-        Identity.TypeOneofCase.Int64Identity =>
-            "i64:" + identity.Int64Identity.ToString(CultureInfo.InvariantCulture),
-        _ => string.Empty,
-    };
 
     private static ResponseHeader OkHeader() => new() { Success = true };
 }

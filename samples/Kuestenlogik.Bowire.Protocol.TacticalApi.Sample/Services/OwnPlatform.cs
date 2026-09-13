@@ -101,8 +101,18 @@ internal sealed class OwnPlatform(ExerciseClock clock)
         }
     }
 
-    /// <summary>A WGS84 point stamped with the current time.</summary>
-    public static Point NewPoint(double latitude, double longitude) =>
+    /// <summary>
+    /// A WGS84 point stamped with the current time and how it was obtained.
+    /// </summary>
+    /// <remarks>
+    /// The default is <c>Estimate</c>, which is what upstream's reference
+    /// client sends for an own-pose update; a position that came off a
+    /// receiver is <c>Gps</c>, which is what it sends for a tracked blue
+    /// force. The code is part of the position, not decoration — a
+    /// consumer fusing tracks weights the two differently.
+    /// </remarks>
+    public static Point NewPoint(
+        double latitude, double longitude, MeasurementCode measured = MeasurementCode.Estimate) =>
         new()
         {
             LocationTime = Timestamp.FromDateTime(DateTime.UtcNow),
@@ -110,7 +120,7 @@ internal sealed class OwnPlatform(ExerciseClock clock)
             {
                 LatitudeCoordinate = latitude,
                 LongitudeCoordinate = longitude,
-                MeasurementCode = MeasurementCode.Estimate,
+                MeasurementCode = measured,
             },
         };
 }

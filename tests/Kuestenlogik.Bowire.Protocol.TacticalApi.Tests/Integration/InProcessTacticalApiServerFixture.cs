@@ -34,6 +34,13 @@ public sealed class InProcessTacticalApiServerFixture : IAsyncLifetime
     /// <summary>The <c>http://...</c> URL the plugin can use as serverUrl.</summary>
     public string ServerUrl { get; private set; } = string.Empty;
 
+    /// <summary>
+    /// The HTTP/1.1 listener. It carries gRPC-Web and nothing else — a
+    /// native gRPC call against it fails — so a test that succeeds here
+    /// has proven the plugin switched transports (#67).
+    /// </summary>
+    public string GrpcWebServerUrl { get; private set; } = string.Empty;
+
     public async ValueTask InitializeAsync()
     {
         // Bind to an ephemeral port; the OS hands us one we then
@@ -52,9 +59,15 @@ public sealed class InProcessTacticalApiServerFixture : IAsyncLifetime
             // InvalidOperationException it throws). 127.0.0.1 + port=0
             // gives us an ephemeral port the OS picks.
             o.Listen(IPAddress.Loopback, 0, lo => lo.Protocols = HttpProtocols.Http2);
+            // The second socket is what TacNet's :4268 is: HTTP/1.1 only,
+            // so the only gRPC that can reach the services on it is
+            // gRPC-Web. Two sockets because a cleartext endpoint cannot
+            // negotiate between HTTP/1.1 and h2c — ALPN lives in TLS.
+            o.Listen(IPAddress.Loopback, 0, lo => lo.Protocols = HttpProtocols.Http1);
         });
 
         var app = builder.Build();
+        app.UseGrpcWeb(new GrpcWebOptions { DefaultEnabled = true });
         app.MapGrpcService<IntegrationSituationService>();
         app.MapGrpcService<IntegrationOwnPoseService>();
         app.MapGrpcService<IntegrationBlueForceTrackingService>();
@@ -66,9 +79,14 @@ public sealed class InProcessTacticalApiServerFixture : IAsyncLifetime
         // http://, which is exactly what we want here.
         var addresses = app.Services.GetRequiredService<Microsoft.AspNetCore.Hosting.Server.IServer>()
             .Features.Get<Microsoft.AspNetCore.Hosting.Server.Features.IServerAddressesFeature>();
-        var address = addresses!.Addresses.First();
-        ServerUrl = address.Replace("[::]", "localhost", StringComparison.Ordinal)
-            .Replace("0.0.0.0", "localhost", StringComparison.Ordinal);
+        // Kestrel reports the listeners in the order they were declared:
+        // the h2c socket first, the HTTP/1.1 one second.
+        var bound = addresses!.Addresses
+            .Select(a => a.Replace("[::]", "localhost", StringComparison.Ordinal)
+                .Replace("0.0.0.0", "localhost", StringComparison.Ordinal))
+            .ToList();
+        ServerUrl = bound[0];
+        GrpcWebServerUrl = bound[1];
 
         _host = app;
     }
@@ -91,6 +109,21 @@ public sealed class InProcessTacticalApiServerFixture : IAsyncLifetime
 /// </summary>
 internal sealed class IntegrationSituationService : Situation.SituationBase
 {
+    /// <summary>The wording of the envelope refusal, asserted by the tests.</summary>
+    internal const string MissingReporterMessage = "reporter is required";
+
+    private readonly object _gate = new();
+    private readonly List<SituationObject> _objects =
+    [
+        new SituationObject
+        {
+            Symbol = new Symbol
+            {
+                Identity = new Identity { UuidIdentity = "test-uuid-1" },
+            },
+        },
+    ];
+
     public override Task<GetSituationObjectsResponse> GetSituationObjects(
         GetSituationObjectsRequest request, ServerCallContext context)
     {
@@ -98,14 +131,58 @@ internal sealed class IntegrationSituationService : Situation.SituationBase
         {
             Header = new ResponseHeader { Success = true },
         };
-        resp.SituationObjects.Add(new SituationObject
+        lock (_gate)
         {
-            Symbol = new Symbol
-            {
-                Identity = new Identity { UuidIdentity = "test-uuid-1" },
-            },
-        });
+            resp.SituationObjects.Add(_objects.Select(o => o.Clone()));
+        }
         return Task.FromResult(resp);
+    }
+
+    public override Task<AddOrUpdateSituationObjectsResponse> AddOrUpdateSituationObjects(
+        AddOrUpdateSituationObjectsRequest request, ServerCallContext context)
+    {
+        // The refusal the contract's own comments call for: every write
+        // message marks `reporter` as Required, and a real server answers
+        // its absence with success = false, not with a gRPC error (#66).
+        // Mirrors the sample's Situation service.
+        foreach (var update in request.SituationObjects)
+        {
+            var reporter = update.Symbol?.Reporter;
+            if (reporter is null || reporter.TypeCase == Identity.TypeOneofCase.None)
+            {
+                return Task.FromResult(new AddOrUpdateSituationObjectsResponse
+                {
+                    Header = new ResponseHeader { Success = false, ErrorMessage = MissingReporterMessage },
+                });
+            }
+        }
+
+        lock (_gate)
+        {
+            foreach (var update in request.SituationObjects)
+            {
+                var symbol = update.Symbol!;
+                _objects.Add(new SituationObject
+                {
+                    Symbol = new Symbol
+                    {
+                        Identity = symbol.Identity,
+                        CreationMetaData = new CreationMetaData
+                        {
+                            CreationTime = symbol.ReportingTime,
+                            CreatorIdentity = symbol.Reporter,
+                        },
+                        Name = symbol.Name is null
+                            ? null
+                            : new DataPropertyString { Content = symbol.Name.Content },
+                    },
+                });
+            }
+        }
+        return Task.FromResult(new AddOrUpdateSituationObjectsResponse
+        {
+            Header = new ResponseHeader { Success = true },
+        });
     }
 
     public override async Task SubscribeSituationObjectEvents(

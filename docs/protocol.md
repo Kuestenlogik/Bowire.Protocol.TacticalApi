@@ -94,10 +94,11 @@ Two more rules that cost data rather than time when missed:
   request that overwrites everything the operator never meant to touch.
 - **A position needs its own time and quality.** `Point.location_time` is the
   time of the fix, not of the report, and `GeoPoint.measurement_code` says how
-  it was obtained &mdash; `GPS` for a tracked position, `ESTIMATE` for a
-  derived one. Upstream's reference client sets both on every position it
-  sends, and `OwnPose.UpdatePosition` additionally names its
-  `source_identifier` (the system reporting the fix).
+  it was obtained &mdash; `MEASUREMENT_CODE_GPS` for a tracked position,
+  `MEASUREMENT_CODE_ESTIMATE` for a derived one (enums go under their full
+  proto names in the JSON the invoke pane sends). Upstream's reference client
+  sets both on every position it sends, and `OwnPose.UpdatePosition`
+  additionally names its `source_identifier` (the system reporting the fix).
 
 **A refused write is not a transport error.** TacticalAPI answers a rejected
 operation with an ordinary gRPC `OK` whose `ResponseHeader` carries
@@ -193,7 +194,7 @@ A companion walkthrough in **[the mock-server docs](../features/mock-server.md#e
 
 ## Sample
 
-A canonical mini-server lives at [`Bowire.Protocol.TacticalApi/samples/Kuestenlogik.Bowire.Protocol.TacticalApi.Sample`](https://github.com/Kuestenlogik/Bowire.Protocol.TacticalApi/tree/main/samples/Kuestenlogik.Bowire.Protocol.TacticalApi.Sample) &mdash; RadarSweep grown into a *combined* sample that serves all three services and mounts the embedded workbench beside them. `dotnet run`, then open <http://localhost:5191/bowire> for the workbench (HTTP/1.1); the gRPC services listen on `http://localhost:5192` (cleartext HTTP/2) and are already seeded into the Sources rail, so an external Bowire connects with `bowire --url tacticalapi@http://localhost:5192`. Thirteen `Situation` tracks in five groups exercise the read side, and two writes are worth driving by hand: `OwnPose.UpdatePosition` moves the own pose, the blue force flagged `own_blue_force` and the UAV mounted on it in one call; a blue force added via `AddOrUpdateBlueForces` and then left alone comes back once with `is_deleted` after 30 s. The ports are split because ALPN lives in the TLS handshake, so one *cleartext* socket cannot serve both HTTP/1.1 and h2c. For a full Harbor Control Center scene with the `Situation` AddOrUpdate / Delete RPCs and gRPC-Web on a second port, see the harbor-demo sibling [`Bowire.Samples/harbor-demo/src/Kuestenlogik.Bowire.Samples.TacticalApi`](https://github.com/Kuestenlogik/Bowire.Samples/tree/main/harbor-demo/src/Kuestenlogik.Bowire.Samples.TacticalApi).
+A canonical mini-server lives at [`Bowire.Protocol.TacticalApi/samples/Kuestenlogik.Bowire.Protocol.TacticalApi.Sample`](https://github.com/Kuestenlogik/Bowire.Protocol.TacticalApi/tree/main/samples/Kuestenlogik.Bowire.Protocol.TacticalApi.Sample) &mdash; RadarSweep grown into a *combined* sample that serves all three services and mounts the embedded workbench beside them. `dotnet run`, then open <http://localhost:5191/bowire> for the workbench (HTTP/1.1); the gRPC services listen on `http://localhost:5192` (cleartext HTTP/2) and are already seeded into the Sources rail, so an external Bowire connects with `bowire --url tacticalapi@http://localhost:5192`. The workbench port also serves the same three services as gRPC-Web, so the plugin's `useGrpcWeb` setting has something to dial (`tacticalapi@http://localhost:5191`). Thirteen `Situation` tracks in five groups exercise the read side, and three writes are worth driving by hand, each with a request body in the sample's README that carries the envelope upstream's reference client sets: `Situation.AddOrUpdateSituationObjects` places a symbol, changes one property of it sparsely, and &mdash; with `reporter` left out &mdash; is refused the way a real server refuses; `OwnPose.UpdatePosition` moves the own pose, the blue force flagged `own_blue_force` and the UAV mounted on it in one call; a blue force added via `AddOrUpdateBlueForces` and then left alone comes back once with `is_deleted` after 30 s. The ports are split because ALPN lives in the TLS handshake, so one *cleartext* socket cannot serve both HTTP/1.1 and h2c. For a full Harbor Control Center scene, see the harbor-demo sibling [`Bowire.Samples/harbor-demo/src/Kuestenlogik.Bowire.Samples.TacticalApi`](https://github.com/Kuestenlogik/Bowire.Samples/tree/main/harbor-demo/src/Kuestenlogik.Bowire.Samples.TacticalApi).
 
 ## Links
 

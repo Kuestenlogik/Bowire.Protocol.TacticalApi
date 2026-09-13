@@ -12,8 +12,9 @@
 //     external workbench or `bowire --url tacticalapi@http://localhost:5192`
 //     at it.
 //
-// All three upstream services are served: Situation (read-only),
-// OwnPose and BlueForceTracking (read and write).
+// All three upstream services are served, each with its reads and its
+// writes — and each write refuses, the way a real server does, when the
+// envelope the contract requires is missing.
 //
 // Two cleartext ports, because one cannot do it. Kestrel can only pick
 // between HTTP/1.1 and HTTP/2 on a shared socket by ALPN, and ALPN is
