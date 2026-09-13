@@ -21,7 +21,7 @@ All three upstream services are served:
 
 | Service | What it does here |
 |---|---|
-| `Situation` | Read-only. The thirteen tracks, as one snapshot per frame. |
+| `Situation` | Read **and write**. The thirteen tracks, as one snapshot per frame — and symbols the operator adds, changes and deletes beside them. |
 | `OwnPose` | Read **and write**. Where this host is, and a way to tell it otherwise. |
 | `BlueForceTracking` | Read **and write**. Friendly participants that report themselves, with keep-alive expiry. |
 
@@ -66,7 +66,64 @@ seeded forces are picked to make the difference visible:
 | `Kiebitz 1` | unmanned, `mount_host = Gecko 21` | None of its own: mounted means *exactly where the host is*. |
 | `Möwe 3` | leader | A leg at 1.4 m/s — the slowest thing on the map. |
 
-Two behaviours are worth driving from the workbench:
+## Writing to it
+
+Three writes are worth driving from the workbench. Each request body below
+is the shape [Rheinmetall's reference client](https://github.com/Rheinmetall/tacticalapi/tree/main/testclient/csharp)
+sends, so copying it produces a request a real server accepts &mdash; and
+each one has a field you can leave out to see the server refuse the way a
+real one does: gRPC answers `OK`, the response header carries
+`success = false` and a reason, and Bowire reports `tacticalapi:refused`
+with that reason in the response metadata. The conventions behind the
+fields are in [the protocol page](../../docs/protocol.md#writing-to-tacticalapi).
+
+- **A symbol you place stays where you put it.** Call `Situation` →
+  `AddOrUpdateSituationObjects` with the envelope every write carries:
+
+  ```json
+  {
+    "situationObjects": [
+      {
+        "symbol": {
+          "identity": { "uuidIdentity": "6f1c2d3e-4a5b-4c6d-8e9f-0a1b2c3d4e5f" },
+          "reporter": { "stringIdentity": "TacticalAPI" },
+          "reportingTime": "2026-09-13T10:15:00Z",
+          "name": { "content": "Fähre Holnis" },
+          "symbolIdentifier": {
+            "content": { "symbolCatalog": "SYMBOL_CATALOG_MIL2525_C", "stringIdentifier": "SNSP------*****" }
+          },
+          "location": {
+            "content": {
+              "point": {
+                "locationTime": "2026-09-13T10:15:00Z",
+                "geoPoint": { "latitudeCoordinate": 54.86, "longitudeCoordinate": 9.58 }
+              }
+            }
+          }
+        }
+      }
+    ]
+  }
+  ```
+
+  `identity` is the symbol's own id &mdash; a fresh UUID to create one, the
+  existing one to change it. `reporter` is who made the change; use the value
+  Rheinmetall gave you, or `TacticalAPI` if you have none. `reportingTime` is
+  the UTC time of the change. All three are marked *Required* in the
+  contract, and this server refuses a write missing any of them &mdash; leave
+  `reporter` out and the response says so.
+
+  Send the same `identity` again with **only** `"name": { "content": "…" }`
+  and only the name changes: updates are sparse, and a property you do not
+  send is a property you did not touch. Send a seeded track's `identity`
+  (they are in `GetSituationObjects`) with a `location` and it stops
+  following its leg &mdash; the operator's fix takes over, the way an own-pose
+  fix does below. Then `DeleteSituationObjects` with the same envelope
+  (`identity`, `reporter`, `reportingTime`) retires it: it comes through the
+  open subscription once more with `isDeleted` set, and is gone from the next
+  `GetSituationObjects`. Delete it twice and the second call is refused
+  &mdash; "no situation object with identity …" &mdash; which is the refusal
+  most worth having seen once.
 
 - **One write moves three things.** Call `OwnPose` → `UpdatePosition`
   with a coordinate &mdash; the envelope the contract expects, not just the
@@ -81,7 +138,7 @@ Two behaviours are worth driving from the workbench:
         "geoPoint": {
           "latitudeCoordinate": 54.52,
           "longitudeCoordinate": 9.91,
-          "measurementCode": "ESTIMATE"
+          "measurementCode": "MEASUREMENT_CODE_ESTIMATE"
         }
       }
     }
@@ -90,10 +147,11 @@ Two behaviours are worth driving from the workbench:
 
   `sourceIdentifier` names the system reporting the fix, `locationTime` is when
   the fix was taken (not when it was reported), and `measurementCode` says how
-  &mdash; `GPS` for a tracked position, `ESTIMATE` for a derived one. Leave
-  `sourceIdentifier` out and this server refuses the write the way a real one
-  does: gRPC answers `OK`, the response header carries `success = false`, and
-  Bowire reports `tacticalapi:refused`. That is the path worth seeing once.
+  &mdash; `MEASUREMENT_CODE_GPS` for a tracked position,
+  `MEASUREMENT_CODE_ESTIMATE` for a derived one. Enums travel under their
+  full proto names in JSON, as here; the short `GPS` the C# bindings use is
+  not accepted on the wire. Leave `sourceIdentifier` out and this server
+  refuses the write.
 
   The own pose reports it, `Gecko 21` reports it, and
   `Kiebitz 1` — bolted to Gecko 21 — reports it too. A client that draws
@@ -114,13 +172,13 @@ Two behaviours are worth driving from the workbench:
         "callsign": "Kiebitz 9",
         "lastContactTime": "2026-09-12T10:15:00Z",
         "blueForceType": { "isUnmanned": true },
-        "symbol": { "symbolCatalog": "MIL_2525C", "stringIdentifier": "SFAPMH----****" },
+        "symbol": { "symbolCatalog": "SYMBOL_CATALOG_MIL2525_C", "stringIdentifier": "SFAPMH----****" },
         "pointLocation": {
           "locationTime": "2026-09-12T10:15:00Z",
           "geoPoint": {
             "latitudeCoordinate": 54.33,
             "longitudeCoordinate": 10.14,
-            "measurementCode": "GPS"
+            "measurementCode": "MEASUREMENT_CODE_GPS"
           }
         }
       }
@@ -142,9 +200,18 @@ dotnet run --project samples/Kuestenlogik.Bowire.Protocol.TacticalApi.Sample
 ```
 
 - **<http://localhost:5191/bowire>** — the embedded workbench, HTTP/1.1.
+  The same socket serves the three services as **gRPC-Web**, which is
+  what Rheinmetall's TacNet does on its `:4268` and what their reference
+  client dials by default. To reach it from outside, turn on the plugin's
+  `useGrpcWeb` setting (Settings → TacticalAPI) and point it here:
+
+  ```pwsh
+  bowire --url tacticalapi@http://localhost:5191
+  ```
+
 - **`http://localhost:5192`** — the three gRPC services, cleartext HTTP/2
-  (h2c). Already in the Sources rail of the embedded workbench; from
-  outside:
+  (h2c) — TacNet's `:4267`. Already in the Sources rail of the embedded
+  workbench; from outside:
 
   ```pwsh
   bowire --url tacticalapi@http://localhost:5192
@@ -155,4 +222,6 @@ HTTP/2 by ALPN, and ALPN is part of the TLS handshake — so a *cleartext*
 endpoint left on the `Http1AndHttp2` default serves HTTP/1.1 and answers
 every gRPC call with HTTP/2 error `HTTP_1_1_REQUIRED`. Splitting the
 ports is also what a real TacticalAPI deployment does: a native gRPC
-port, and a web port beside it.
+port, and a web port beside it. Point the plugin at the wrong one and the
+error is a transport error, not a refusal: `useGrpcWeb` against `:5192`
+or native gRPC against `:5191` both fail before any service is reached.

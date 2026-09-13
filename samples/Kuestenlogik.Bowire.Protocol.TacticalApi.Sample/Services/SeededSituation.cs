@@ -64,8 +64,12 @@ internal static class SeededSituation
         void Add(string uuid, string symbolCode, string name, TrackMotion motion)
         {
             var start = motion.At(0.0);
-            objects[uuid] = BuildTrack(uuid, symbolCode, name, start, reporter, now);
-            motions[uuid] = motion;
+            var track = BuildTrack(uuid, symbolCode, name, start, reporter, now);
+            // Keyed the way the service keys everything, so an operator's
+            // update addressed by uuid lands on the seeded track it names.
+            var key = IdentityKeys.Of(track.Symbol.Identity);
+            objects[key] = track;
+            motions[key] = motion;
         }
 
         // --- RadarSweep: the original three, 120° apart on one circle ---

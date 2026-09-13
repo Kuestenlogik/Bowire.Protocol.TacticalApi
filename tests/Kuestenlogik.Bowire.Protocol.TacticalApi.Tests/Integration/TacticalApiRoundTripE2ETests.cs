@@ -81,6 +81,91 @@ public sealed class TacticalApiRoundTripE2ETests : IClassFixture<InProcessTactic
     }
 
     [Fact]
+    public async Task Invoke_AddOrUpdateSituationObjects_without_a_reporter_is_refused()
+    {
+        // The refusal the issue names: every Situation write marks `reporter`
+        // as Required, and the server says no in the header (#66). The rest
+        // of the envelope is present, so this is the one field's absence.
+        var plugin = new BowireTacticalApiProtocol();
+        var ct = TestContext.Current.CancellationToken;
+
+        var result = await plugin.InvokeAsync(
+            GrpcUrl(), "Situation", "AddOrUpdateSituationObjects",
+            jsonMessages:
+            [
+                """
+                {
+                  "situationObjects": [
+                    {
+                      "symbol": {
+                        "identity": { "uuidIdentity": "e2e-no-reporter" },
+                        "reportingTime": "2026-09-13T10:00:00Z",
+                        "name": { "content": "Nameless" }
+                      }
+                    }
+                  ]
+                }
+                """,
+            ],
+            showInternalServices: false, metadata: null, ct: ct);
+
+        Assert.Equal(BowireTacticalApiProtocol.RefusedStatus, result.Status);
+        Assert.Equal(
+            IntegrationSituationService.MissingReporterMessage,
+            result.Metadata[BowireTacticalApiProtocol.RefusalMessageKey]);
+
+        // A refused write changed nothing.
+        var read = await plugin.InvokeAsync(
+            GrpcUrl(), "Situation", "GetSituationObjects",
+            jsonMessages: ["{}"], showInternalServices: false, metadata: null, ct: ct);
+        Assert.DoesNotContain("e2e-no-reporter", read.Response, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Invoke_AddOrUpdateSituationObjects_with_the_full_envelope_lands()
+    {
+        // The envelope upstream's reference client sets on every write —
+        // identity, reporter "TacticalAPI", reporting_time — is accepted,
+        // and the header check leaves no refusal trace on a good write.
+        var plugin = new BowireTacticalApiProtocol();
+        var ct = TestContext.Current.CancellationToken;
+
+        var write = await plugin.InvokeAsync(
+            GrpcUrl(), "Situation", "AddOrUpdateSituationObjects",
+            jsonMessages:
+            [
+                """
+                {
+                  "situationObjects": [
+                    {
+                      "symbol": {
+                        "identity": { "uuidIdentity": "e2e-symbol-1" },
+                        "reporter": { "stringIdentity": "TacticalAPI" },
+                        "reportingTime": "2026-09-13T10:00:00Z",
+                        "name": { "content": "Testfalke" }
+                      }
+                    }
+                  ]
+                }
+                """,
+            ],
+            showInternalServices: false, metadata: null, ct: ct);
+
+        Assert.Equal("OK", write.Status);
+        Assert.DoesNotContain(BowireTacticalApiProtocol.RefusalMessageKey, write.Metadata.Keys);
+
+        var read = await plugin.InvokeAsync(
+            GrpcUrl(), "Situation", "GetSituationObjects",
+            jsonMessages: ["{}"], showInternalServices: false, metadata: null, ct: ct);
+
+        Assert.Equal("OK", read.Status);
+        Assert.Contains("e2e-symbol-1", read.Response, StringComparison.Ordinal);
+        // The reporter travels with the object: it is the creator identity
+        // on the read side, which is the provenance the issue is about.
+        Assert.Contains("TacticalAPI", read.Response, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task InvokeStream_refusing_frame_ends_the_pump_as_an_error()
     {
         var plugin = new BowireTacticalApiProtocol();

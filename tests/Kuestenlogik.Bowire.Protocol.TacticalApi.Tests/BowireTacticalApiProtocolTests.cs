@@ -249,6 +249,35 @@ public sealed class BowireTacticalApiProtocolTests
     }
 
     [Fact]
+    public async Task Discover_TheAnnotationsReachTheFormThroughDiscovery()
+    {
+        // The seam tests above pin the wording; this one pins the route. The
+        // annotations live three and four levels below the request type, so
+        // a projection that stopped descending — or descended one level
+        // fewer — would keep every seam test green while the form lost them.
+        var services = await DiscoverAsProductionDoes(
+            "tacticalapi@http://localhost:5192", TestContext.Current.CancellationToken);
+
+        var addOrUpdate = services.Single(s => s.Name == "Situation")
+            .Methods.Single(m => m.Name == "AddOrUpdateSituationObjects");
+
+        var objects = addOrUpdate.InputType.Fields.Single(f => f.Name == "situation_objects");
+        var symbol = objects.MessageType!.Fields.Single(f => f.Name == "symbol");
+        Assert.Contains("only one field in this group", symbol.Description ?? "", StringComparison.Ordinal);
+
+        var reporter = symbol.MessageType!.Fields.Single(f => f.Name == "reporter");
+        Assert.True(reporter.Required);
+
+        var name = symbol.MessageType.Fields.Single(f => f.Name == "name");
+        var content = name.MessageType!.Fields.Single(f => f.Name == "content");
+        Assert.Contains("omit the whole property", content.Description ?? "", StringComparison.Ordinal);
+
+        // And the response side stays flat, which is what keeps the discovery
+        // payload readable — the form is built from requests only.
+        Assert.All(addOrUpdate.OutputType.Fields, f => Assert.Null(f.MessageType));
+    }
+
+    [Fact]
     public void Discover_UpdateProperties_CarryTheSparseUpdateRule()
     {
         // The one that protects data: a full object overwrites what the

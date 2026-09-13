@@ -89,12 +89,16 @@ internal static class GrpcTransport
 
         var url = serverUrl.Trim();
 
-        // tacticalapi@host:port → strip the Bowire protocol-prefix and
-        // default to https. The @-form is how Bowire's URL parser routes
-        // to this plugin when several plugins could match a host:port.
+        // tacticalapi@host:port → strip the Bowire protocol-prefix. The
+        // @-form is how Bowire's URL parser routes to this plugin when
+        // several plugins could match a host:port. What is left goes
+        // through the same scheme handling as an unprefixed URL: the core
+        // strips the prefix itself when the rest carries a scheme, but a
+        // caller that hands the plugin `tacticalapi@http://host` directly
+        // used to get `https://http://host` back.
         const string Prefix = "tacticalapi@";
         if (url.StartsWith(Prefix, StringComparison.OrdinalIgnoreCase))
-            url = "https://" + url[Prefix.Length..];
+            url = url[Prefix.Length..];
 
         // gRPC-style scheme shorthands. RFC-flavoured but widely used; we
         // accept them so users can paste a connect string verbatim.
@@ -113,18 +117,6 @@ internal static class GrpcTransport
     }
 
     /// <summary>
-    /// Builds <see cref="GrpcChannelOptions"/> for the configured transport
-    /// behaviour. The metadata bag drives the optional settings; an empty /
-    /// null bag produces a no-options default that uses .NET's stock HTTPS
-    /// + trust-store + no client cert.
-    /// </summary>
-    /// <remarks>
-    /// Caller is responsible for disposing the returned options' <see cref="HttpClientHandler"/>
-    /// when the channel is torn down. <see cref="GrpcChannel.Dispose"/> handles
-    /// it for us when <c>DisposeHttpClient = true</c>, which is the default
-    /// we set here.
-    /// </remarks>
-    /// <summary>
     /// True when the caller asked for gRPC-Web — either through this plugin's
     /// <c>useGrpcWeb</c> setting or through the core's shared
     /// <c>__bowireGrpcTransport=web</c> marker (#67).
@@ -137,6 +129,18 @@ internal static class GrpcTransport
             && string.Equals(transport, "web", StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>
+    /// Builds <see cref="GrpcChannelOptions"/> for the configured transport
+    /// behaviour. The metadata bag drives the optional settings; an empty /
+    /// null bag produces a no-options default that uses .NET's stock HTTPS
+    /// + trust-store + no client cert, over native gRPC on HTTP/2.
+    /// </summary>
+    /// <remarks>
+    /// Caller is responsible for disposing the returned options' <see cref="HttpClientHandler"/>
+    /// when the channel is torn down. <see cref="GrpcChannel.Dispose"/> handles
+    /// it for us when <c>DisposeHttpClient = true</c>, which is the default
+    /// we set here.
+    /// </remarks>
     public static GrpcChannelOptions BuildChannelOptions(IReadOnlyDictionary<string, string>? metadata)
     {
         if (metadata is null || metadata.Count == 0)

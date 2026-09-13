@@ -21,6 +21,11 @@ public sealed class GrpcTransportTests
     [InlineData("situation.example.com:4267", "https://situation.example.com:4267")]
     // Trims whitespace.
     [InlineData("  tacticalapi@host:4267  ", "https://host:4267")]
+    // The prefix on a URL that already carries a scheme — the shape this
+    // repo's own sample README documents — keeps that scheme.
+    [InlineData("tacticalapi@http://localhost:5192", "http://localhost:5192")]
+    [InlineData("tacticalapi@grpc://localhost:5192", "http://localhost:5192")]
+    [InlineData("tacticalapi@https://host:4267", "https://host:4267")]
     public void ResolveGrpcAddress_NormalisesToHttpOrHttps(string input, string expected)
     {
         Assert.Equal(expected, GrpcTransport.ResolveGrpcAddress(input));

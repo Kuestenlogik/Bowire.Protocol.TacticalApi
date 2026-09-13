@@ -13,6 +13,10 @@
     <PackageReference Include="Kuestenlogik.Bowire" />
     <PackageReference Include="Google.Protobuf" />
     <PackageReference Include="Grpc.AspNetCore" />
+    <!-- gRPC-Web on the fixture's HTTP/1.1 listener, so the plugin's
+         useGrpcWeb path is proven against a port that speaks nothing
+         else (#67). -->
+    <PackageReference Include="Grpc.AspNetCore.Web" />
     <PackageReference Include="Microsoft.Extensions.Hosting" />
     <PackageReference Include="Microsoft.Testing.Extensions.CodeCoverage" />
   </ItemGroup>

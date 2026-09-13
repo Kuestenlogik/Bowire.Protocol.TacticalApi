@@ -12,12 +12,10 @@ namespace Kuestenlogik.Bowire.Protocol.TacticalApi.Sample.Services;
 /// </summary>
 /// <remarks>
 /// <para>
-/// All three RPCs are implemented, including the write. <c>Situation</c>
-/// deliberately leaves its mutations to the harbour demo, so until now
-/// nothing in this sample could be changed from the workbench — every
-/// button was a read. <c>UpdatePosition</c> is a single field and one
-/// obvious consequence, which makes it the cheapest honest write the
-/// sample can offer: send a fix, and the open
+/// All three RPCs are implemented, including the write. This was the
+/// first write the sample had — <c>Situation</c> gained its own later —
+/// and it is still the cheapest honest one: <c>UpdatePosition</c> is a
+/// single field and one obvious consequence. Send a fix, and the open
 /// <c>SubscribePositionChangedEvents</c> stream reports it on the next
 /// tick, along with the blue force this host reports as its own.
 /// </para>

@@ -172,13 +172,14 @@ internal static class TacticalApiDescriptors
     /// annotations (#68) can be pinned by a test.
     /// </summary>
     /// <remarks>
-    /// A seam rather than a reach through <see cref="BuildServiceInfos"/>: that
-    /// projection is deliberately shallow, so the messages carrying the
-    /// annotations — <c>UpdateSymbol</c>, <c>UpdatePropertyString</c> — are
-    /// nested below the request types and never appear in its output. Searches
-    /// the service files and everything they import, because the write messages
-    /// live in <c>situation_object_updates.proto</c> while the services live
-    /// next door.
+    /// A seam beside <see cref="BuildServiceInfos"/>, not a replacement for
+    /// testing through it: the messages carrying the annotations —
+    /// <c>UpdateSymbol</c>, <c>UpdatePropertyString</c> — sit three and four
+    /// levels below the request types, and a test that wants to pin one
+    /// message's wording should not have to walk there. The route itself is
+    /// pinned separately, through discovery. Searches the service files and
+    /// everything they import, because the write messages live in
+    /// <c>situation_object_updates.proto</c> while the services live next door.
     /// </remarks>
     internal static BowireMessageInfo DescribeMessageForTests(string messageName)
     {
