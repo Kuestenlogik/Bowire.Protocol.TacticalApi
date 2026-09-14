@@ -250,4 +250,43 @@ public sealed class BowireTacticalApiProtocolInvokeTests
         Assert.Contains("error", only, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("unary", only, StringComparison.OrdinalIgnoreCase);
     }
+
+    [Fact]
+    public async Task Invoke_UnloadableMtlsMarker_IsReportedBeforeAnyDial()
+    {
+        // The operator's own PEM material did not load. That is a
+        // configuration error and the result has to say so — not
+        // "Unavailable" from a dial that never had a certificate to present.
+        var plugin = new BowireTacticalApiProtocol();
+        var result = await plugin.InvokeAsync(
+            Url, "Situation", "GetSituationObjects",
+            jsonMessages: ["{}"], showInternalServices: false,
+            metadata: BrokenMarker(), ct: TestContext.Current.CancellationToken);
+
+        Assert.Equal(BowireTacticalApiProtocol.BadTransportConfigStatus, result.Status);
+        Assert.Contains(Kuestenlogik.Bowire.Auth.MtlsConfig.MtlsMarkerKey, result.Response, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task InvokeStream_UnloadableMtlsMarker_YieldsOneErrorFrame()
+    {
+        var plugin = new BowireTacticalApiProtocol();
+        var frames = new List<string>();
+        await foreach (var frame in plugin.InvokeStreamAsync(
+            Url, "Situation", "SubscribeSituationObjectEvents",
+            jsonMessages: ["{}"], showInternalServices: false,
+            metadata: BrokenMarker(), ct: TestContext.Current.CancellationToken))
+        {
+            frames.Add(frame);
+        }
+
+        var only = Assert.Single(frames);
+        Assert.Contains(BowireTacticalApiProtocol.BadTransportConfigStatus, only, StringComparison.Ordinal);
+    }
+
+    private static Dictionary<string, string> BrokenMarker() => new(StringComparer.Ordinal)
+    {
+        [Kuestenlogik.Bowire.Auth.MtlsConfig.MtlsMarkerKey] =
+            """{ "certificate": "-----BEGIN CERTIFICATE-----\nkaputt\n-----END CERTIFICATE-----", "privateKey": "-----BEGIN PRIVATE KEY-----\nkaputt\n-----END PRIVATE KEY-----" }""",
+    };
 }
