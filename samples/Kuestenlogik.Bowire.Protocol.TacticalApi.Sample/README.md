@@ -123,7 +123,10 @@ fields are in [the protocol page](../../docs/protocol.md#writing-to-tacticalapi)
   open subscription once more with `isDeleted` set, and is gone from the next
   `GetSituationObjects`. Delete it twice and the second call is refused
   &mdash; "no situation object with identity …" &mdash; which is the refusal
-  most worth having seen once.
+  most worth having seen once. A symbol sent with an `expiryTime` retires
+  itself: the contract says expired symbols are marked deleted
+  automatically, and the next tick after the time passes does exactly what
+  a delete does, with `Sample.Expiry` as the reporter.
 
 - **One write moves three things.** Call `OwnPose` → `UpdatePosition`
   with a coordinate &mdash; the envelope the contract expects, not just the
@@ -191,7 +194,10 @@ fields are in [the protocol page](../../docs/protocol.md#writing-to-tacticalapi)
   last time with `is_deleted` set, then disappears from `GetBlueForces` —
   the upstream keep-alive contract. The seeded four are re-stamped every
   tick, so they stay. A client that ignores `is_deleted` keeps drawing a
-  friendly unit that is not there.
+  friendly unit that is not there. Leave `identity` or `lastContactTime`
+  out and the write is refused &mdash; the whole request, not just that
+  entry, because the contract has one header per call and no
+  partial-success shape.
 
 ## Two ports, and why
 

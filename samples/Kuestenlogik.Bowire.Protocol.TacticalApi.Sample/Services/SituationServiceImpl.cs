@@ -44,6 +44,16 @@ namespace Kuestenlogik.Bowire.Protocol.TacticalApi.Sample.Services;
 /// reference client writes is enough to show the shape. The other ten
 /// are refused with a message that says so.
 /// </para>
+/// <para>
+/// <c>expiry_time</c> is honoured: "Expired symbols are automatically
+/// marked as deleted", says the contract, and the tick does that — an
+/// expired symbol goes out once more flagged <c>is_deleted</c>, stamped
+/// by <see cref="ExpiryReporter"/>, and is then gone, the same path a
+/// delete takes. Every frame carries clones of the served objects: the
+/// tick mutates the stored ones under the lock, and a frame that held
+/// the same instances was serialised outside it, so a subscriber could
+/// see a convoy with half its coordinates from the last tick.
+/// </para>
 /// </remarks>
 internal sealed class SituationServiceImpl : Situation.SituationBase, IScenarioTick
 {
@@ -51,6 +61,9 @@ internal sealed class SituationServiceImpl : Situation.SituationBase, IScenarioT
     private readonly Dictionary<string, SituationObject> _objects;
     private readonly Dictionary<string, TrackMotion> _motions;
     private readonly SubscriberFanout<SubscribeSituationObjectEventsResponse> _fanout = new();
+
+    /// <summary>Who an expiry sweep reports as having retired a symbol.</summary>
+    internal static readonly Identity ExpiryReporter = new() { StringIdentity = "Sample.Expiry" };
 
     public SituationServiceImpl()
     {
@@ -67,7 +80,7 @@ internal sealed class SituationServiceImpl : Situation.SituationBase, IScenarioT
         var response = new GetSituationObjectsResponse { Header = OkHeader() };
         lock (_gate)
         {
-            foreach (var obj in _objects.Values) response.SituationObjects.Add(obj);
+            foreach (var obj in _objects.Values) response.SituationObjects.Add(obj.Clone());
         }
         return Task.FromResult(response);
     }
@@ -144,10 +157,52 @@ internal sealed class SituationServiceImpl : Situation.SituationBase, IScenarioT
     }
 
     /// <inheritdoc />
-    public void Tick(double elapsedSeconds)
+    public void Tick(double elapsedSeconds) => TickAt(elapsedSeconds, DateTime.UtcNow);
+
+    /// <summary>
+    /// <see cref="Tick"/> with the clock passed in, so a test can expire a
+    /// symbol without waiting for its <c>expiry_time</c> to come round.
+    /// </summary>
+    internal void TickAt(double elapsedSeconds, DateTime nowUtc)
     {
-        AdvanceTracks(elapsedSeconds);
-        _fanout.Broadcast(BuildSnapshot());
+        AdvanceTracks(elapsedSeconds, nowUtc);
+        var frame = BuildSnapshot();
+        frame.SituationObjects.Add(SweepExpired(nowUtc));
+        _fanout.Broadcast(frame);
+    }
+
+    /// <summary>
+    /// Retire every symbol whose <c>expiry_time</c> has passed, and hand
+    /// the retired ones back flagged <c>is_deleted</c> so the frame can
+    /// carry them once. Same shape as a delete, with the sweep as reporter.
+    /// </summary>
+    private List<SituationObject> SweepExpired(DateTime nowUtc)
+    {
+        var retired = new List<SituationObject>();
+        lock (_gate)
+        {
+            foreach (var (key, obj) in _objects)
+            {
+                if (obj.Symbol?.ExpiryTime?.Content is not { } expiry) continue;
+                if (expiry.ToDateTime() > nowUtc) continue;
+                retired.Add(obj);
+                _motions.Remove(key);
+            }
+            foreach (var gone in retired)
+            {
+                _objects.Remove(IdentityKeys.Of(gone.Symbol.Identity));
+                gone.IsDeleted = new DataPropertyBool
+                {
+                    CreationMetaData = new CreationMetaData
+                    {
+                        CreationTime = Timestamp.FromDateTime(nowUtc),
+                        CreatorIdentity = ExpiryReporter,
+                    },
+                    Content = true,
+                };
+            }
+        }
+        return retired;
     }
 
     // ---- the write side ------------------------------------------------------
@@ -362,9 +417,9 @@ internal sealed class SituationServiceImpl : Situation.SituationBase, IScenarioT
             _ => "(none)",
         };
 
-    private void AdvanceTracks(double elapsedSeconds)
+    private void AdvanceTracks(double elapsedSeconds, DateTime nowUtc)
     {
-        var now = Timestamp.FromDateTime(DateTime.UtcNow);
+        var now = Timestamp.FromDateTime(nowUtc);
         lock (_gate)
         {
             foreach (var (id, obj) in _objects)
@@ -385,12 +440,18 @@ internal sealed class SituationServiceImpl : Situation.SituationBase, IScenarioT
         }
     }
 
+    /// <summary>
+    /// The served objects as they stand, cloned under the lock. The frame
+    /// is serialised by the subscriber pumps outside it, and the tick
+    /// writes coordinates into the stored objects in place — the same
+    /// instance in both would let a frame carry a position from two ticks.
+    /// </summary>
     private SubscribeSituationObjectEventsResponse BuildSnapshot()
     {
         var snapshot = new SubscribeSituationObjectEventsResponse { Header = OkHeader() };
         lock (_gate)
         {
-            foreach (var obj in _objects.Values) snapshot.SituationObjects.Add(obj);
+            foreach (var obj in _objects.Values) snapshot.SituationObjects.Add(obj.Clone());
         }
         return snapshot;
     }
