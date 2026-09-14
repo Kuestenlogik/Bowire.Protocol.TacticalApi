@@ -335,6 +335,91 @@ public sealed class TacticalApiRoundTripE2ETests : IClassFixture<InProcessTactic
     }
 
     [Fact]
+    public async Task InvokeStream_with_streamIdleSeconds_ends_a_silent_subscription_with_an_idle_frame()
+    {
+        // The setting shipped with the plugin and nothing read it, so the
+        // toggle did nothing at all. Pin the behaviour its description always
+        // promised: the data frames arrive, the server goes quiet, and after
+        // the idle window the pump ends with one frame that says why.
+        var plugin = new BowireTacticalApiProtocol();
+        var ct = TestContext.Current.CancellationToken;
+
+        var frames = new List<string>();
+        await foreach (var frame in plugin.InvokeStreamAsync(
+            GrpcUrl(), "OwnPose", "SubscribePositionChangedEvents",
+            jsonMessages: ["{}"], showInternalServices: false,
+            metadata: new Dictionary<string, string>
+            {
+                [IntegrationOwnPoseService.StallHeader] = "1",
+                ["streamIdleSeconds"] = "1",
+            },
+            ct: ct).ConfigureAwait(false))
+        {
+            frames.Add(frame);
+        }
+
+        Assert.Equal(3, frames.Count);
+        Assert.Contains("pose-frame-0", frames[0], StringComparison.Ordinal);
+        Assert.Contains("pose-frame-1", frames[1], StringComparison.Ordinal);
+        Assert.Contains(BowireTacticalApiProtocol.StreamIdleStatus, frames[2], StringComparison.Ordinal);
+        Assert.Contains("streamIdleSeconds", frames[2], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task InvokeStream_with_streamIdleSeconds_leaves_a_stream_that_keeps_up_alone()
+    {
+        // The idle bound is between frames, not on the call: a pump that
+        // delivers within the window and then closes ends the way it always
+        // did — two frames, no idle frame, no error.
+        var plugin = new BowireTacticalApiProtocol();
+        var ct = TestContext.Current.CancellationToken;
+
+        var frames = new List<string>();
+        await foreach (var frame in plugin.InvokeStreamAsync(
+            GrpcUrl(), "OwnPose", "SubscribePositionChangedEvents",
+            jsonMessages: ["{}"], showInternalServices: false,
+            metadata: new Dictionary<string, string> { ["streamIdleSeconds"] = "10" },
+            ct: ct).ConfigureAwait(false))
+        {
+            frames.Add(frame);
+        }
+
+        Assert.Equal(2, frames.Count);
+        Assert.DoesNotContain(frames, f => f.Contains(BowireTacticalApiProtocol.StreamIdleStatus, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task InvokeStream_ignores_invocationDeadlineSeconds_so_a_subscription_outlives_the_unary_deadline()
+    {
+        // A one-second deadline against a stalled stream used to end it with
+        // DeadlineExceeded, because the unary knob was applied to the
+        // streaming call too. Now the deadline is unary-only: the stream
+        // outlives it and ends on the idle timeout, which is the stream's
+        // own knob — three frames, the last one an idle frame, no exception.
+        var plugin = new BowireTacticalApiProtocol();
+        var ct = TestContext.Current.CancellationToken;
+
+        var frames = new List<string>();
+        await foreach (var frame in plugin.InvokeStreamAsync(
+            GrpcUrl(), "OwnPose", "SubscribePositionChangedEvents",
+            jsonMessages: ["{}"], showInternalServices: false,
+            metadata: new Dictionary<string, string>
+            {
+                [IntegrationOwnPoseService.StallHeader] = "1",
+                ["invocationDeadlineSeconds"] = "1",
+                ["streamIdleSeconds"] = "3",
+            },
+            ct: ct).ConfigureAwait(false))
+        {
+            frames.Add(frame);
+        }
+
+        Assert.Equal(3, frames.Count);
+        Assert.Contains(BowireTacticalApiProtocol.StreamIdleStatus, frames[2], StringComparison.Ordinal);
+        Assert.DoesNotContain("DeadlineExceeded", frames[2], StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Invoke_GetBlueForces_round_trips_through_plugin()
     {
         var plugin = new BowireTacticalApiProtocol();

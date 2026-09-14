@@ -157,8 +157,8 @@ public sealed class GrpcTransportTests
         // prefix, so they were being forwarded to the server as gRPC headers —
         // the same leak of configuration intent the prefixed keys are filtered
         // for (#67).
-        Assert.True(GrpcTransport.IsTransportKey("invocationDeadlineSeconds"));
-        Assert.True(GrpcTransport.IsTransportKey("streamIdleSeconds"));
+        Assert.True(GrpcTransport.IsTransportKey(GrpcTransport.InvocationDeadlineSecondsKey));
+        Assert.True(GrpcTransport.IsTransportKey(GrpcTransport.StreamIdleSecondsKey));
         Assert.True(GrpcTransport.IsTransportKey(GrpcTransport.AllowSelfSignedCertsKey));
         Assert.True(GrpcTransport.IsTransportKey(GrpcTransport.UseGrpcWebKey));
         Assert.True(GrpcTransport.IsTransportKey(GrpcTransport.GrpcTransportMarkerKey));
@@ -177,5 +177,29 @@ public sealed class GrpcTransportTests
         // but the _bowire: key is ours alone and case-sensitive lookup
         // catches accidental typos in operator configs.
         Assert.False(GrpcTransport.IsTransportKey("_Bowire:tls-skip-validation"));
+    }
+
+    [Theory]
+    [InlineData("30", 30)]
+    [InlineData("1", 1)]
+    [InlineData("0", 0)]
+    [InlineData("-5", 0)]
+    [InlineData("abc", 0)]
+    [InlineData("2.5", 0)]
+    [InlineData("", 0)]
+    public void ReadPositiveSeconds_OffForAnythingButAPositiveInteger(string raw, int expected)
+    {
+        // Both timeouts advertise 0 as "off". A value the operator mistyped
+        // must land on that default, not throw inside a call.
+        var metadata = new Dictionary<string, string> { [GrpcTransport.StreamIdleSecondsKey] = raw };
+        Assert.Equal(expected, GrpcTransport.ReadPositiveSeconds(metadata, GrpcTransport.StreamIdleSecondsKey));
+    }
+
+    [Fact]
+    public void ReadPositiveSeconds_OffWhenAbsent()
+    {
+        Assert.Equal(0, GrpcTransport.ReadPositiveSeconds(null, GrpcTransport.StreamIdleSecondsKey));
+        Assert.Equal(0, GrpcTransport.ReadPositiveSeconds(
+            new Dictionary<string, string>(), GrpcTransport.StreamIdleSecondsKey));
     }
 }

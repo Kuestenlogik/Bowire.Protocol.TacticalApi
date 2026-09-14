@@ -94,14 +94,16 @@ CI and a laptop run exactly the same pass.
 
 ## Upstream proto pinning
 
-The bundled schema is fetched from a specific commit on
+The bundled schema is fetched from a pinned git ref on
 [`Rheinmetall/tacticalapi`](https://github.com/Rheinmetall/tacticalapi)
-(see the `<TacticalApiCommit>` property in the csproj). Rheinmetall
-publishes commits but no release tags as of 2026-05; pinning to a
-commit-SHA is the only reproducible option. The weekly
+(the `<TacticalApiProtoRef>` property in the csproj). Rheinmetall
+publishes commits but no release tags as of 2026-09, so the ref is a
+commit SHA — the only reproducible option until a tag exists; when one
+does, the same property takes it. The weekly
 [`check-upstream-protos.yml`](.github/workflows/check-upstream-protos.yml)
 workflow watches the upstream `HEAD` and opens an issue when a new
-commit lands so the pin gets bumped deliberately rather than drifting.
+commit lands, and says so when a tag has appeared, so the pin gets
+bumped deliberately rather than drifting.
 
 ## Acknowledgements
 
