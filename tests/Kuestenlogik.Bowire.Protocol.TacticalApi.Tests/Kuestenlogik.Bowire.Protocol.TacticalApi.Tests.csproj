@@ -5,11 +5,6 @@
     <!-- Sdk.Web pulls ASP.NET Core in so the integration suite can
          spin up a real Kestrel + Grpc server in-process. -->
     <NoWarn>$(NoWarn);CA1812;CA1515;CA1056</NoWarn>
-    <!-- No static web assets here: the tests serve gRPC, not pages, and
-         referencing the sample (which carries the embedded workbench's
-         assets) alongside the core package made the SDK's precompressed-
-         asset discovery trip over the same asset arriving twice. -->
-    <StaticWebAssetsEnabled>false</StaticWebAssetsEnabled>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Grpc.Tools" />
@@ -27,9 +22,5 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\Kuestenlogik.Bowire.Protocol.TacticalApi\Kuestenlogik.Bowire.Protocol.TacticalApi.csproj" />
-    <!-- The sample's services, hosted in-process by InProcessSampleServerFixture
-         so the behaviour its README promises is pinned here (InternalsVisibleTo
-         on the sample side). -->
-    <ProjectReference Include="..\..\samples\Kuestenlogik.Bowire.Protocol.TacticalApi.Sample\Kuestenlogik.Bowire.Protocol.TacticalApi.Sample.csproj" />
   </ItemGroup>
 </Project>

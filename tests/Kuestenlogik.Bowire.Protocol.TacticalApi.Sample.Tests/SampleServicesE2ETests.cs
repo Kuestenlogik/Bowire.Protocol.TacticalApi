@@ -3,7 +3,7 @@
 
 using Kuestenlogik.Bowire.Protocol.TacticalApi.Sample.Services;
 
-namespace Kuestenlogik.Bowire.Protocol.TacticalApi.Tests.Integration;
+namespace Kuestenlogik.Bowire.Protocol.TacticalApi.Sample.Tests;
 
 /// <summary>
 /// The sample's services, driven through the plugin the way an operator
