@@ -29,6 +29,15 @@ namespace Kuestenlogik.Bowire.Protocol.TacticalApi.Sample.Services;
 /// force nobody is reporting any more — which on a map is not a stale
 /// pixel but a friendly unit that is not there.
 /// </para>
+/// <para>
+/// The write refuses the way the <c>Situation</c> writes do. "All fields
+/// must be filled in every call" upstream; the two this server cannot do
+/// without are <c>identity</c> — there is nothing to key a force by
+/// without one — and <c>last_contact_time</c>, which is what the
+/// keep-alive contract reads. A force missing either used to be skipped
+/// while the call answered <c>success = true</c>: the server-side twin of
+/// the buried refusal #66 fixed on the client.
+/// </para>
 /// </remarks>
 internal sealed class BlueForceTrackingServiceImpl(OwnPlatform platform)
     : BlueForceTracking.BlueForceTrackingBase, IScenarioTick
@@ -56,20 +65,40 @@ internal sealed class BlueForceTrackingServiceImpl(OwnPlatform platform)
     {
         ArgumentNullException.ThrowIfNull(request);
 
+        // Everything is checked before anything lands: one header per
+        // request, and a request half-applied and then refused leaves the
+        // caller unsure which half is on the map.
+        for (var i = 0; i < request.BlueForcesToUpdates.Count; i++)
+        {
+            var update = request.BlueForcesToUpdates[i];
+            var at = $"blue_forces_to_updates[{i}]";
+            if (IdentityKeys.Of(update.Identity).Length == 0)
+            {
+                return Task.FromResult(new AddOrUpdateBlueForcesResponse
+                {
+                    Header = RefusedHeader($"{at}: identity is required — the force's own string_identity or uuid_identity."),
+                });
+            }
+            if (update.LastContactTime is null)
+            {
+                return Task.FromResult(new AddOrUpdateBlueForcesResponse
+                {
+                    Header = RefusedHeader($"{at}: last_contact_time is required — the keep-alive reads it; a force that is not re-sent within 30 s is deleted."),
+                });
+            }
+        }
+
         var now = DateTime.UtcNow;
         var accepted = new List<BlueForce>();
         lock (_gate)
         {
             foreach (var update in request.BlueForcesToUpdates)
             {
-                var key = IdentityKeys.Of(update.Identity);
-                if (key.Length == 0) continue;
-
                 // "All fields must be filled in every call" upstream, so
                 // the update replaces rather than merges — the only thing
                 // carried over is the arrival time that keeps it alive.
                 var force = ToBlueForce(update);
-                _reported[key] = new ReportedBlueForce(force, now);
+                _reported[IdentityKeys.Of(update.Identity)] = new ReportedBlueForce(force, now);
                 accepted.Add(force);
             }
         }
@@ -118,13 +147,20 @@ internal sealed class BlueForceTrackingServiceImpl(OwnPlatform platform)
     }
 
     /// <inheritdoc />
-    public void Tick(double elapsedSeconds)
+    public void Tick(double elapsedSeconds) => TickAt(elapsedSeconds, DateTime.UtcNow);
+
+    /// <summary>
+    /// <see cref="Tick"/> with the clock passed in, so a test can run the
+    /// keep-alive sweep thirty seconds into the future without waiting
+    /// thirty seconds.
+    /// </summary>
+    internal void TickAt(double elapsedSeconds, DateTime nowUtc)
     {
         List<BlueForce> expired;
         lock (_gate)
         {
             _elapsedSeconds = elapsedSeconds;
-            expired = SweepExpiredLocked(DateTime.UtcNow);
+            expired = SweepExpiredLocked(nowUtc);
         }
 
         var frame = new SubscribeBlueForceEventsResponse { Header = OkHeader() };
@@ -247,4 +283,7 @@ internal sealed class BlueForceTrackingServiceImpl(OwnPlatform platform)
         };
 
     private static ResponseHeader OkHeader() => new() { Success = true };
+
+    private static ResponseHeader RefusedHeader(string why) =>
+        new() { Success = false, ErrorMessage = why };
 }

@@ -33,4 +33,12 @@
     <Content Update="tacticalapi-catalogue.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- The plugin's integration suite hosts these services in-process
+         and drives them through the plugin — the sample's behaviour
+         (sparse updates, the envelope refusals, expiry and keep-alive)
+         is what the README promises, so it is what the tests pin. -->
+    <InternalsVisibleTo Include="Kuestenlogik.Bowire.Protocol.TacticalApi.Tests" />
+  </ItemGroup>
+
 </Project>
