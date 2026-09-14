@@ -10,16 +10,15 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
-namespace Kuestenlogik.Bowire.Protocol.TacticalApi.Tests.Integration;
+namespace Kuestenlogik.Bowire.Protocol.TacticalApi.Sample.Tests;
 
 /// <summary>
 /// The sample's own three services, hosted in-process on an ephemeral
-/// h2c port. <see cref="InProcessTacticalApiServerFixture"/> hosts stubs
-/// written for the plugin's sake; this one hosts what
-/// <c>dotnet run --project samples/…</c> serves, so the behaviour the
-/// sample README promises — sparse updates, the envelope refusals,
-/// expiry, the keep-alive — is pinned by a test rather than by a smoke
-/// run somebody did once.
+/// h2c port. The plugin's suite hosts stubs written for the plugin's
+/// sake; this one hosts what <c>dotnet run --project samples/…</c>
+/// serves, so the behaviour the sample README promises — sparse updates,
+/// the envelope refusals, expiry, the keep-alive — is pinned by a test
+/// rather than by a smoke run somebody did once.
 /// </summary>
 /// <remarks>
 /// No <c>ScenarioTicker</c>: the tests drive <c>TickAt</c> themselves with

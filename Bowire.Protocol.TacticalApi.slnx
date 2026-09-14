@@ -4,6 +4,7 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Kuestenlogik.Bowire.Protocol.TacticalApi.Tests/Kuestenlogik.Bowire.Protocol.TacticalApi.Tests.csproj" />
+    <Project Path="tests/Kuestenlogik.Bowire.Protocol.TacticalApi.Sample.Tests/Kuestenlogik.Bowire.Protocol.TacticalApi.Sample.Tests.csproj" />
   </Folder>
   <Folder Name="/samples/">
     <Project Path="samples/Kuestenlogik.Bowire.Protocol.TacticalApi.Sample/Kuestenlogik.Bowire.Protocol.TacticalApi.Sample.csproj" />

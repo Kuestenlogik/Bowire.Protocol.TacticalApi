@@ -304,11 +304,15 @@ public sealed class BowireTacticalApiProtocol : IBowireProtocol
         return headers;
     }
 
-    /// <summary>Status reported when the server answered, and refused.</summary>
-    internal const string RefusedStatus = "tacticalapi:refused";
+    /// <summary>
+    /// Status reported when the server answered, and refused. Public because
+    /// it is part of what a caller reads off an <see cref="InvokeResult"/>,
+    /// not an implementation detail.
+    /// </summary>
+    public const string RefusedStatus = "tacticalapi:refused";
 
     /// <summary>Metadata key carrying the refusal's own wording.</summary>
-    internal const string RefusalMessageKey = "_tacticalapi:errorMessage";
+    public const string RefusalMessageKey = "_tacticalapi:errorMessage";
 
     /// <summary>Status on the final frame when <c>streamIdleSeconds</c> ended a subscription.</summary>
     internal const string StreamIdleStatus = "tacticalapi:stream-idle";
