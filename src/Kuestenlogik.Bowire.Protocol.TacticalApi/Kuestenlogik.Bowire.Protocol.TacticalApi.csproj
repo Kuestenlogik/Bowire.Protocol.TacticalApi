@@ -40,14 +40,20 @@
     The bindings are derivative of the .proto schema but the .proto source
     itself never lands in our source tree or our NuGet package.
 
-    Pinned commit: 58661c9c5de7db1b944a37f6ed05fe16c603cd0e — "Add position
-    and blue force tracking", which added the OwnPose and BlueForceTracking
-    services next to Situation. TODO: bump to a released tag once
-    Rheinmetall cuts one.
+    The pin is a git ref: a release tag once Rheinmetall cuts one, a
+    commit SHA until then (as of 2026-09-14 upstream has commits and no
+    tags). raw.githubusercontent.com resolves either, so moving to a tag
+    is a one-line edit here — nothing else names the ref. The weekly
+    check-upstream-protos workflow reports when upstream moves ahead of
+    this ref, and calls it out separately when a tag has appeared.
+
+    Pinned: 58661c9c5de7db1b944a37f6ed05fe16c603cd0e — "Add position and
+    blue force tracking", which added the OwnPose and BlueForceTracking
+    services next to Situation.
   -->
   <PropertyGroup>
-    <TacticalApiProtoSha>58661c9c5de7db1b944a37f6ed05fe16c603cd0e</TacticalApiProtoSha>
-    <TacticalApiProtoBaseUrl>https://raw.githubusercontent.com/Rheinmetall/tacticalapi/$(TacticalApiProtoSha)/rheinmetall/tactical_api/v0</TacticalApiProtoBaseUrl>
+    <TacticalApiProtoRef>58661c9c5de7db1b944a37f6ed05fe16c603cd0e</TacticalApiProtoRef>
+    <TacticalApiProtoBaseUrl>https://raw.githubusercontent.com/Rheinmetall/tacticalapi/$(TacticalApiProtoRef)/rheinmetall/tactical_api/v0</TacticalApiProtoBaseUrl>
     <!--
       The .proto files reference each other with their full path
       ('rheinmetall/tactical_api/v0/types.proto', etc.), so they have to

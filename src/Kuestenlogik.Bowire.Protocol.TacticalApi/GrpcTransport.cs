@@ -45,11 +45,17 @@ internal static class GrpcTransport
     /// </summary>
     internal static readonly string[] SettingKeys =
     [
-        "invocationDeadlineSeconds",
-        "streamIdleSeconds",
-        "allowSelfSignedCerts",
-        "useGrpcWeb",
+        InvocationDeadlineSecondsKey,
+        StreamIdleSecondsKey,
+        AllowSelfSignedCertsKey,
+        UseGrpcWebKey,
     ];
+
+    /// <summary>Setting that bounds a unary call; streams are not deadlined (see <see cref="StreamIdleSecondsKey"/>).</summary>
+    internal const string InvocationDeadlineSecondsKey = "invocationDeadlineSeconds";
+
+    /// <summary>Setting that ends a subscription after this many seconds without a frame.</summary>
+    internal const string StreamIdleSecondsKey = "streamIdleSeconds";
 
     /// <summary>Setting that switches the wire to gRPC-Web over HTTP/1.1 (#67).</summary>
     internal const string UseGrpcWebKey = "useGrpcWeb";
@@ -269,5 +275,24 @@ internal static class GrpcTransport
             return true;
         value = false;
         return false;
+    }
+
+    /// <summary>
+    /// A positive integer setting, or 0 when the key is absent, unparseable
+    /// or not positive — every seconds-valued setting here advertises 0 as
+    /// "off", so a bad value degrades to the documented default rather than
+    /// to an exception in the middle of a call.
+    /// </summary>
+    internal static int ReadPositiveSeconds(IReadOnlyDictionary<string, string>? source, string key)
+    {
+        if (source is null) return 0;
+        if (source.TryGetValue(key, out var raw)
+            && int.TryParse(raw, System.Globalization.NumberStyles.Integer,
+                System.Globalization.CultureInfo.InvariantCulture, out var seconds)
+            && seconds > 0)
+        {
+            return seconds;
+        }
+        return 0;
     }
 }

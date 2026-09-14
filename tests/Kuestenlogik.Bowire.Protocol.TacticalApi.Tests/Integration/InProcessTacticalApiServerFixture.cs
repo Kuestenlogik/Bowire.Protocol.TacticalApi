@@ -250,6 +250,13 @@ internal sealed class IntegrationOwnPoseService : OwnPose.OwnPoseBase
     /// <summary>The wording both refusal paths use, asserted by the tests.</summary>
     internal const string RefusalMessage = "source_identifier is required";
 
+    /// <summary>
+    /// Request header that makes the subscribe pump send one frame and then
+    /// go quiet until the client hangs up — a server that is alive but has
+    /// nothing to say, which is what the idle timeout is for.
+    /// </summary>
+    internal const string StallHeader = "x-fixture-stall";
+
     public override Task<UpdatePositionResponse> UpdatePosition(
         UpdatePositionRequest request, ServerCallContext context)
     {
@@ -311,6 +318,20 @@ internal sealed class IntegrationOwnPoseService : OwnPose.OwnPoseBase
                     },
                 },
                 context.CancellationToken).ConfigureAwait(false);
+        }
+
+        // Stall after the data: the stream stays open and silent until the
+        // client cancels. Without the header the pump closes as before.
+        if (context.RequestHeaders.Get(StallHeader) is not null)
+        {
+            try
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, context.CancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                // The client hung up — the normal end of a stalled subscription.
+            }
         }
     }
 

@@ -39,8 +39,9 @@ public sealed class BowireTacticalApiProtocol : IBowireProtocol
 
     // Plugin-wide defaults. Mirrored as DefaultValue on the BowirePluginSetting
     // entries below so the workbench UI and the runtime can't drift. Zero
-    // means "no deadline" (gRPC default behaviour); positive integers are
-    // honoured by InvokeAsync / InvokeStreamAsync when they build CallOptions.
+    // means "off" for both timeouts: InvokeAsync folds a positive deadline
+    // into its CallOptions, InvokeStreamAsync bounds the wait between frames
+    // by the idle setting. Each knob has one path, and the paths do not cross.
     internal const int DefaultInvocationDeadlineSeconds = 0;
     internal const int DefaultStreamIdleSeconds = 0;
     internal const bool DefaultAllowSelfSignedCerts = false;
@@ -55,11 +56,15 @@ public sealed class BowireTacticalApiProtocol : IBowireProtocol
     /// <inheritdoc />
     public IReadOnlyList<BowirePluginSetting> Settings =>
     [
-        new("invocationDeadlineSeconds", "Invocation deadline",
-            $"Per-call gRPC deadline in seconds. 0 means no deadline (default). Useful when a downstream server hangs on cold connect.",
+        new(GrpcTransport.InvocationDeadlineSecondsKey, "Invocation deadline",
+            "Per-call gRPC deadline in seconds for unary calls. 0 means no deadline (default). "
+            + "Useful when a downstream server hangs on cold connect. Subscriptions are not deadlined — "
+            + "a deadline on a stream would end every subscription on the clock; use the stream idle timeout for those.",
             "number", DefaultInvocationDeadlineSeconds),
-        new("streamIdleSeconds", "Stream idle timeout",
-            $"Tear down a server-streaming subscription after this many seconds without a frame. 0 means 'never' (default — the stream runs until the server closes or the caller cancels).",
+        new(GrpcTransport.StreamIdleSecondsKey, "Stream idle timeout",
+            "Tear down a server-streaming subscription after this many seconds without a frame. "
+            + "0 means 'never' (default — the stream runs until the server closes or the caller cancels). "
+            + "The pump ends with one last frame carrying status tacticalapi:stream-idle so the reason is on record.",
             "number", DefaultStreamIdleSeconds),
         new("allowSelfSignedCerts", "Allow self-signed certs",
             "Skip the server certificate chain validation. Off by default. The shared `__bowireMtls__` marker overrides this per-call when present.",
@@ -294,6 +299,9 @@ public sealed class BowireTacticalApiProtocol : IBowireProtocol
     /// <summary>Metadata key carrying the refusal's own wording.</summary>
     internal const string RefusalMessageKey = "_tacticalapi:errorMessage";
 
+    /// <summary>Status on the final frame when <c>streamIdleSeconds</c> ended a subscription.</summary>
+    internal const string StreamIdleStatus = "tacticalapi:stream-idle";
+
     /// <summary>
     /// Read the <c>ResponseHeader</c> every TacticalAPI response embeds, and
     /// report whether the server refused the operation.
@@ -346,17 +354,53 @@ public sealed class BowireTacticalApiProtocol : IBowireProtocol
     /// surface advertises 0 ("no deadline") as the default so the gRPC
     /// stock behaviour stays untouched unless the operator opts in.
     /// </summary>
+    /// <remarks>
+    /// Unary only. This used to be applied to the streaming call as well,
+    /// which made a 30 s deadline set for a slow cold connect end every
+    /// subscription after 30 s with <c>DeadlineExceeded</c> — a gRPC deadline
+    /// bounds the whole call, and a subscription is a call that is meant to
+    /// stay open. The knob for those is <c>streamIdleSeconds</c>, applied per
+    /// frame in <see cref="MoveNextWithinIdleAsync"/>.
+    /// </remarks>
     private static CallOptions ApplyDeadline(CallOptions opts, Dictionary<string, string>? metadata)
     {
-        if (metadata is null) return opts;
-        if (metadata.TryGetValue("invocationDeadlineSeconds", out var raw) &&
-            int.TryParse(raw, System.Globalization.NumberStyles.Integer,
-                System.Globalization.CultureInfo.InvariantCulture, out var seconds) &&
-            seconds > 0)
+        var seconds = GrpcTransport.ReadPositiveSeconds(metadata, GrpcTransport.InvocationDeadlineSecondsKey);
+        return seconds > 0 ? opts.WithDeadline(DateTime.UtcNow.AddSeconds(seconds)) : opts;
+    }
+
+    /// <summary>
+    /// Wait for the next frame, but no longer than <paramref name="idleSeconds"/>
+    /// when that is positive. Throws <see cref="TimeoutException"/> when the
+    /// server went quiet for that long.
+    /// </summary>
+    /// <remarks>
+    /// The <c>streamIdleSeconds</c> setting shipped in the settings surface
+    /// with a description of exactly this behaviour, and nothing read it —
+    /// the same silent no-op <c>allowSelfSignedCerts</c> was until #67. A
+    /// timed-out <c>MoveNext</c> is still pending when this throws; disposing
+    /// the call faults it, and the continuation observes that fault so it does
+    /// not surface as an unobserved task exception on the finalizer thread.
+    /// </remarks>
+    private static async Task<bool> MoveNextWithinIdleAsync(
+        IAsyncStreamReader<byte[]> stream, int idleSeconds, CancellationToken ct)
+    {
+        var next = stream.MoveNext(ct);
+        if (idleSeconds <= 0)
+            return await next.ConfigureAwait(false);
+
+        try
         {
-            return opts.WithDeadline(DateTime.UtcNow.AddSeconds(seconds));
+            return await next.WaitAsync(TimeSpan.FromSeconds(idleSeconds), ct).ConfigureAwait(false);
         }
-        return opts;
+        catch (TimeoutException)
+        {
+            _ = next.ContinueWith(
+                static t => _ = t.Exception,
+                CancellationToken.None,
+                TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+            throw;
+        }
     }
 
     /// <inheritdoc />
@@ -424,8 +468,10 @@ public sealed class BowireTacticalApiProtocol : IBowireProtocol
 
         var requestBytes = requestMessage.ToByteArray();
         var headers = BuildMetadata(metadata);
-        var callOptions = ApplyDeadline(
-            new CallOptions(headers: headers, cancellationToken: ct), metadata);
+        // No deadline here — see ApplyDeadline. The stream's own bound is the
+        // idle timeout, applied between frames rather than to the call.
+        var callOptions = new CallOptions(headers: headers, cancellationToken: ct);
+        var idleSeconds = GrpcTransport.ReadPositiveSeconds(metadata, GrpcTransport.StreamIdleSecondsKey);
 
         var address = GrpcTransport.ResolveGrpcAddress(serverUrl);
         var channelOptions = GrpcTransport.BuildChannelOptions(metadata);
@@ -433,8 +479,36 @@ public sealed class BowireTacticalApiProtocol : IBowireProtocol
         using var call = channel.CreateCallInvoker()
             .AsyncServerStreamingCall(grpcMethod, host: null, options: callOptions, request: requestBytes);
 
-        while (await call.ResponseStream.MoveNext(ct).ConfigureAwait(false))
+        while (true)
         {
+            // An iterator cannot yield from inside a catch, so the timeout is
+            // carried out of the try as a flag.
+            bool more;
+            var idled = false;
+            try
+            {
+                more = await MoveNextWithinIdleAsync(call.ResponseStream, idleSeconds, ct).ConfigureAwait(false);
+            }
+            catch (TimeoutException)
+            {
+                more = false;
+                idled = true;
+            }
+
+            if (idled)
+            {
+                // Same shape as the refusal frame below: the pump ends with a
+                // frame that says why, not with a silent end-of-stream the
+                // operator would read as the server having closed.
+                var detail = $"No frame for {idleSeconds} s — closing the subscription (streamIdleSeconds).";
+                yield return $$"""
+                    { "error": {{System.Text.Json.JsonSerializer.Serialize(detail)}}, "status": "{{StreamIdleStatus}}" }
+                    """;
+                yield break;
+            }
+            if (!more)
+                break;
+
             var responseBytes = call.ResponseStream.Current;
             var responseMessage = methodDesc.OutputType.Parser.ParseFrom(responseBytes);
             var frameJson = JsonFormatter.Default.Format(responseMessage);

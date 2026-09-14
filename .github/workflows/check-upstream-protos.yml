@@ -1,18 +1,20 @@
 name: Check upstream tacticalapi
 
 # Weekly drift check against Rheinmetall/tacticalapi. The plugin pins the
-# upstream `.proto` files to a specific commit SHA (TacticalApiProtoSha in
-# the src .csproj) for reproducibility — without this, any upstream push
-# would silently change the bytes a `dotnet pack` produces from the same
+# upstream `.proto` files to a git ref (TacticalApiProtoRef in the src
+# .csproj) for reproducibility — without this, any upstream push would
+# silently change the bytes a `dotnet pack` produces from the same
 # Bowire-side commit. The trade-off is that we miss upstream fixes /
 # additions unless we deliberately bump.
 #
-# This workflow runs once a week, compares the pinned SHA against upstream
-# `main` HEAD, and posts (or updates) a single open issue labelled
-# `upstream-bump` summarising what's changed — with a special call-out
-# for changes to `.proto` files (the only thing that actually affects our
-# generated client). Pure docs/test/README changes upstream get an FYI
-# entry but don't escalate.
+# The ref is a commit SHA today because upstream has no release tags yet.
+# This workflow runs once a week, resolves the pinned ref, compares it
+# against upstream `main` HEAD, and posts (or updates) a single open issue
+# labelled `upstream-bump` summarising what's changed — with a special
+# call-out for changes to `.proto` files (the only thing that actually
+# affects our generated client), and another when upstream has cut a tag
+# the pin should move to. Pure docs/test/README changes upstream get an
+# FYI entry but don't escalate.
 
 on:
   schedule:
@@ -29,7 +31,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Compare pinned SHA against upstream HEAD
+      - name: Compare pinned ref against upstream HEAD and tags
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           UPSTREAM_REPO: Rheinmetall/tacticalapi
@@ -38,28 +40,37 @@ jobs:
         run: |
           set -euo pipefail
 
-          # The pinned SHA lives in the src .csproj as
-          #   <TacticalApiProtoSha>HEX40</TacticalApiProtoSha>
-          # Be lenient about whitespace; only the 40-char hex matters.
-          PINNED=$(grep -oE '<TacticalApiProtoSha>[a-f0-9]{40}</TacticalApiProtoSha>' \
+          # The pinned ref lives in the src .csproj as
+          #   <TacticalApiProtoRef>REF</TacticalApiProtoRef>
+          # where REF is a tag name or a commit SHA. Resolve it to a SHA
+          # through the API so both forms compare the same way.
+          PINNED_REF=$(grep -oE '<TacticalApiProtoRef>[^<]+</TacticalApiProtoRef>' \
             src/Kuestenlogik.Bowire.Protocol.TacticalApi/Kuestenlogik.Bowire.Protocol.TacticalApi.csproj \
-            | grep -oE '[a-f0-9]{40}' | head -1)
+            | sed -E 's#</?TacticalApiProtoRef>##g' | head -1)
 
-          if [ -z "$PINNED" ]; then
-            echo "::error::Could not parse <TacticalApiProtoSha> from src .csproj"
+          if [ -z "$PINNED_REF" ]; then
+            echo "::error::Could not parse <TacticalApiProtoRef> from src .csproj"
             exit 1
           fi
 
+          PINNED=$(gh api "repos/$UPSTREAM_REPO/commits/$PINNED_REF" --jq .sha)
           HEAD=$(gh api "repos/$UPSTREAM_REPO/commits/$UPSTREAM_BRANCH" --jq .sha)
-          echo "pinned : $PINNED"
+          echo "pinned : $PINNED_REF ($PINNED)"
           echo "head   : $HEAD"
 
-          if [ "$PINNED" = "$HEAD" ]; then
+          # Tags: the pin is meant to move to one as soon as upstream cuts
+          # one. Newest first is the API's order for a repo that tags in
+          # sequence; good enough for a call-out a human reads.
+          LATEST_TAG=$(gh api "repos/$UPSTREAM_REPO/tags" --jq '.[0].name // empty')
+          LATEST_TAG_SHA=$(gh api "repos/$UPSTREAM_REPO/tags" --jq '.[0].commit.sha // empty')
+          echo "tag    : ${LATEST_TAG:-none} ${LATEST_TAG_SHA}"
+
+          if [ "$PINNED" = "$HEAD" ] && { [ -z "$LATEST_TAG" ] || [ "$LATEST_TAG_SHA" = "$PINNED" ]; }; then
             echo "Up to date — nothing to do."
             # If there was a previously-open issue, close it.
             EXISTING=$(gh issue list --label "$LABEL" --state open --json number --jq '.[0].number // empty')
             if [ -n "$EXISTING" ]; then
-              gh issue close "$EXISTING" --comment "Upstream pin is now equal to upstream HEAD ($HEAD). Closing automatically."
+              gh issue close "$EXISTING" --comment "Upstream pin $PINNED_REF is now equal to upstream HEAD ($HEAD). Closing automatically."
             fi
             exit 0
           fi
@@ -76,11 +87,25 @@ jobs:
 
           # Issue title doubles as a dedupe key — same title means we
           # update the existing open issue rather than spawning a new one.
-          TITLE="Upstream tacticalapi is $AHEAD commits ahead of pinned SHA"
+          if [ "$AHEAD" = "0" ]; then
+            TITLE="Upstream tacticalapi has cut tag $LATEST_TAG — move the pin to it"
+          else
+            TITLE="Upstream tacticalapi is $AHEAD commits ahead of pinned ref"
+          fi
+          if [ -n "$LATEST_TAG" ]; then
+            BUMP_TARGET="to \`$LATEST_TAG\` if that tag covers what you need, otherwise to \`$HEAD\`"
+          else
+            BUMP_TARGET="to \`$HEAD\`"
+          fi
 
           {
-            echo "Upstream is **$AHEAD commits ahead** of the pinned SHA \`$PINNED\` (HEAD now \`$HEAD\`)."
+            echo "Upstream is **$AHEAD commits ahead** of the pinned ref \`$PINNED_REF\` (\`$PINNED\`; HEAD now \`$HEAD\`)."
             echo ""
+            if [ -n "$LATEST_TAG" ] && [ "$LATEST_TAG_SHA" != "$PINNED" ]; then
+              echo "### Upstream has a tag: \`$LATEST_TAG\` (\`$LATEST_TAG_SHA\`)"
+              echo "The pin has waited for one. Move \`<TacticalApiProtoRef>\` to the tag name rather than to a SHA."
+              echo ""
+            fi
             if [ -n "$PROTO_FILES" ]; then
               echo "### \`.proto\` changes — these affect the generated client"
               echo "$PROTO_FILES"
@@ -99,7 +124,7 @@ jobs:
             fi
             echo "### Bump procedure"
             echo "1. Verify upstream changes don't break our \`BowireTacticalApiProtocol\` / descriptor lookup."
-            echo "2. Update \`<TacticalApiProtoSha>\` in \`src/.../Kuestenlogik.Bowire.Protocol.TacticalApi.csproj\` to \`$HEAD\`."
+            echo "2. Update \`<TacticalApiProtoRef>\` in \`src/.../Kuestenlogik.Bowire.Protocol.TacticalApi.csproj\` $BUMP_TARGET."
             echo "   Added files also need an entry in the \`_TacticalApiProtoFile\` group, and a new *service* needs its generated reflection descriptor in \`TacticalApiDescriptors.ServiceFiles\` — nothing else downstream names a file."
             echo "3. \`dotnet pack -c Release\` locally to verify the new \`.proto\` files compile."
             echo "4. Bump the plugin's own version, tag, push."

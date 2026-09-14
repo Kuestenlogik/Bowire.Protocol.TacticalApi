@@ -60,17 +60,28 @@ The plugin normalises the URL Bowire passes through:
 | `grpcs://host:50051` | `https://host:50051` |
 | `host:4267` | `https://host:4267` |
 
-### mTLS / TLS settings via metadata
+### Settings
 
-TacticalAPI servers in production almost always run behind mTLS. The plugin reads two configuration keys from the workbench metadata bag — these never reach the wire (they're filtered out before the gRPC `Metadata` is built):
+The plugin declares four settings (Settings → TacticalAPI). The workbench delivers them in the metadata bag, and the plugin strips them before the gRPC `Metadata` is built, so none of them reaches the server:
 
-| Metadata key | Purpose |
+| Setting | Default | What it does |
+|---|---|---|
+| `invocationDeadlineSeconds` | `0` (off) | gRPC deadline for **unary** calls. Bounds a cold connect against a server that hangs. Not applied to subscriptions &mdash; a deadline on a stream would end every subscription on the clock. |
+| `streamIdleSeconds` | `0` (off) | Ends a subscription after this many seconds **without a frame**. The pump closes with one last frame carrying `"status": "tacticalapi:stream-idle"` and the reason, so the frame pane shows why it stopped rather than looking like the server hung up. |
+| `allowSelfSignedCerts` | `false` | Skip server-certificate validation. Staging and self-signed only. |
+| `useGrpcWeb` | `false` | Speak gRPC-Web over HTTP/1.1 instead of native gRPC over HTTP/2 &mdash; see [Two ports](#two-ports-native-grpc-and-grpc-web). |
+
+Anything else in the metadata bag travels as a gRPC request header, except the transport keys below.
+
+### mTLS / TLS
+
+TacticalAPI servers in production almost always run behind mTLS. The plugin takes its TLS configuration from the metadata bag and never forwards any of it &mdash; the keys are filtered out before the gRPC `Metadata` is built. Three paths:
+
+| Path | Purpose |
 |---|---|
-| `_bowire:tls-skip-validation=true` | Accept any server certificate. For staging / self-signed only — same opt-in semantics as the core gRPC plugin's `--allow-self-signed-certs`. |
-| `_bowire:client-cert-pfx=<path>` | Path to a PFX file with the client certificate + private key. |
-| `_bowire:client-cert-password=<pw>` | Password for the PFX (omit for unprotected PFX). |
-
-Set both via the workbench's metadata panel before clicking **Execute**, or via `--metadata _bowire:client-cert-pfx=...` from the CLI.
+| **`__bowireMtls__`** (shared marker) | The preferred path, and the one the workbench's mTLS auth profile writes: client certificate and private key as PEM, plus `allowSelfSigned`. It is the same marker the core REST / gRPC / Kafka / AMQP plugins read (`Kuestenlogik.Bowire.Auth.MtlsConfig`), so an mTLS profile set up once in the workbench works on TacticalAPI the same way it works everywhere else. When it is present, the legacy PFX keys below are ignored so two client certificates never load at once. |
+| `allowSelfSignedCerts=true` (setting) | Accept any server certificate. Same opt-in semantics as the core gRPC plugin's `--allow-self-signed-certs`; the marker's own `allowSelfSigned` covers the same need. |
+| `_bowire:tls-skip-validation=true`, `_bowire:client-cert-pfx=<path>`, `_bowire:client-cert-password=<pw>` (legacy) | The keys this plugin first shipped with: accept any server certificate; a PFX with client certificate and private key; its password (omit for an unprotected PFX). Still honoured so recorded sessions and saved profiles from before the shared marker keep working. From the CLI: `--metadata _bowire:client-cert-pfx=...`. |
 
 ### Writing to TacticalAPI
 
