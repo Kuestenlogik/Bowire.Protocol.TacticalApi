@@ -3,6 +3,7 @@
 
 using System.Net;
 using System.Net.Http;
+using System.Net.Security;
 using System.Security.Cryptography.X509Certificates;
 using Grpc.Net.Client;
 using Grpc.Net.Client.Web;
@@ -142,10 +143,13 @@ internal static class GrpcTransport
     /// + trust-store + no client cert, over native gRPC on HTTP/2.
     /// </summary>
     /// <remarks>
-    /// Caller is responsible for disposing the returned options' <see cref="HttpClientHandler"/>
-    /// when the channel is torn down. <see cref="GrpcChannel.Dispose"/> handles
-    /// it for us when <c>DisposeHttpClient = true</c>, which is the default
-    /// we set here.
+    /// The returned options own their handler chain (<c>DisposeHttpClient =
+    /// true</c>), and the chain owns the certificates it loaded: disposing the
+    /// <see cref="GrpcChannel"/> tears all of it down. Throws
+    /// <see cref="TransportConfigurationException"/> when the marker's PEM
+    /// material does not load — a wrong passphrase, a truncated paste — so
+    /// the caller can report that as the configuration error it is rather
+    /// than as a TLS failure against the server.
     /// </remarks>
     public static GrpcChannelOptions BuildChannelOptions(IReadOnlyDictionary<string, string>? metadata)
     {
@@ -156,22 +160,22 @@ internal static class GrpcTransport
         // options object: that is the shape CA2000 asks for, and the handler
         // really does change owners here — GrpcChannelOptions.DisposeHttpClient
         // makes the channel dispose whichever handler it ends up holding, and
-        // GrpcWebHandler disposes the inner one with itself.
+        // each wrapping handler disposes the inner one with itself.
         HttpClientHandler? handler = new();
+        HttpMessageHandler? outer = null;
+        MtlsCertificatePair? certs = null;
         try
         {
             var changed = false;
 
-            // The declared setting, finally read. It shipped in the settings
-            // surface from the start and nothing consumed it, so the toggle in
-            // the workbench did nothing at all — the same silent no-op the
-            // `_bowire:` key below has always covered (#67).
-            if (TryGetBool(metadata, AllowSelfSignedCertsKey, out var allowSelfSigned) && allowSelfSigned)
-            {
-                handler.ServerCertificateCustomValidationCallback =
-                    HttpClientHandler.DangerousAcceptAnyServerCertificateValidator;
-                changed = true;
-            }
+            // Accept-anything is the union of every opt-in that means it: the
+            // declared setting (a silent no-op until #67), the legacy
+            // _bowire: key, and the shared marker's own flag. Any of them set
+            // wins over CA pinning below — the operator asked for it.
+            var acceptAny =
+                (TryGetBool(metadata, AllowSelfSignedCertsKey, out var allowSelfSigned) && allowSelfSigned)
+                || (TryGetBool(metadata, TlsSkipValidationKey, out var skipValidation) && skipValidation);
+            Func<HttpRequestMessage, X509Certificate2?, X509Chain?, SslPolicyErrors, bool>? pinning = null;
 
             // Preferred path: the shared __bowireMtls__ marker (PEM-based,
             // documented in Kuestenlogik.Bowire.Auth.MtlsConfig). Wins over
@@ -180,36 +184,31 @@ internal static class GrpcTransport
             // a single auth vocabulary across the fleet means an mTLS
             // session-profile set up in the workbench works on TacticalAPI
             // the same way it works on REST / gRPC / Kafka / AMQP.
+            //
+            // The core loads the pair: an encrypted private key needs the
+            // marker's passphrase, and the marker's CA certificate is what a
+            // pinning validator checks against. Reading only the certificate
+            // and key by hand, as this used to, failed on the former and
+            // ignored the latter — the marker read in full is what the auth
+            // profile's four fields promise.
             var sharedMtls = MtlsConfig.TryParseFromMetadata(metadata);
             if (sharedMtls is not null)
             {
-                var cert = X509Certificate2.CreateFromPem(
-                    sharedMtls.CertificatePem, sharedMtls.PrivateKeyPem);
-                handler.ClientCertificates.Add(cert);
+                certs = sharedMtls.TryLoadCertificates(out var error)
+                    ?? throw new TransportConfigurationException(
+                        $"The {MtlsConfig.MtlsMarkerKey} client certificate could not be loaded: {error}");
+                handler.ClientCertificates.Add(certs.ClientCert!);
                 handler.ClientCertificateOptions = ClientCertificateOption.Manual;
                 if (sharedMtls.AllowSelfSigned)
-                {
-                    handler.ServerCertificateCustomValidationCallback =
-                        HttpClientHandler.DangerousAcceptAnyServerCertificateValidator;
-                }
+                    acceptAny = true;
+                else if (sharedMtls.BuildServerValidator(certs.CaCert!) is { } validator)
+                    pinning = (sender, cert, chain, errors) => validator(sender, cert!, chain!, errors);
                 changed = true;
             }
-
-            // Legacy: _bowire:tls-skip-validation. Still honoured so existing
-            // recorded sessions / saved auth profiles keep working — the
-            // shared marker's AllowSelfSigned property covers the same need.
-            if (TryGetBool(metadata, TlsSkipValidationKey, out var skipValidation) && skipValidation)
-            {
-                handler.ServerCertificateCustomValidationCallback =
-                    HttpClientHandler.DangerousAcceptAnyServerCertificateValidator;
-                changed = true;
-            }
-
             // Legacy: _bowire:client-cert-pfx / _bowire:client-cert-password.
             // Only consulted when the shared marker is absent so a workbench
             // shipping both paths doesn't end up loading two certificates.
-            if (sharedMtls is null &&
-                metadata.TryGetValue(ClientCertPfxPathKey, out var pfxPath) &&
+            else if (metadata.TryGetValue(ClientCertPfxPathKey, out var pfxPath) &&
                 !string.IsNullOrWhiteSpace(pfxPath))
             {
                 metadata.TryGetValue(ClientCertPasswordKey, out var pfxPassword);
@@ -224,6 +223,33 @@ internal static class GrpcTransport
                 changed = true;
             }
 
+            if (acceptAny)
+            {
+                handler.ServerCertificateCustomValidationCallback =
+                    HttpClientHandler.DangerousAcceptAnyServerCertificateValidator;
+                changed = true;
+            }
+            else if (pinning is not null)
+            {
+                handler.ServerCertificateCustomValidationCallback = pinning;
+            }
+
+            if (!changed && !WantsGrpcWeb(metadata))
+                return new GrpcChannelOptions();
+
+            // The certificates live exactly as long as the handler that
+            // presents them: a wrapper in the chain disposes the pair when
+            // the channel disposes the chain. HttpClientHandler does not
+            // dispose what is in ClientCertificates, so without this the
+            // private key sat in memory until the process ended.
+            outer = handler;
+            handler = null;
+            if (certs is not null)
+            {
+                outer = new CertificateOwningHandler(outer, certs);
+                certs = null;
+            }
+
             // gRPC-Web rides HTTP/1.1, so the version moves with the handler:
             // Grpc.Net.Client defaults to HTTP/2, and a GrpcWebHandler on an
             // HTTP/2 request is a combination no TacNet port answers (#67).
@@ -231,28 +257,49 @@ internal static class GrpcTransport
             {
                 var webOptions = new GrpcChannelOptions
                 {
-                    HttpHandler = new GrpcWebHandler(GrpcWebMode.GrpcWeb, handler),
+                    HttpHandler = new GrpcWebHandler(GrpcWebMode.GrpcWeb, outer),
                     HttpVersion = HttpVersion.Version11,
                     DisposeHttpClient = true,
                 };
-                handler = null;
+                outer = null;
                 return webOptions;
             }
 
-            if (!changed)
-                return new GrpcChannelOptions();
-
             var options = new GrpcChannelOptions
             {
-                HttpHandler = handler,
+                HttpHandler = outer,
                 DisposeHttpClient = true,
             };
-            handler = null;
+            outer = null;
             return options;
         }
         finally
         {
+            certs?.Dispose();
+            outer?.Dispose();
             handler?.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Holds the certificate pair a handler chain presents, and disposes it
+    /// with the chain. <see cref="DelegatingHandler"/> disposes its inner
+    /// handler by default, so this slots in without changing who owns what
+    /// below it.
+    /// </summary>
+    private sealed class CertificateOwningHandler(HttpMessageHandler inner, MtlsCertificatePair certs)
+        : DelegatingHandler(inner)
+    {
+        private MtlsCertificatePair? _certs = certs;
+
+        protected override void Dispose(bool disposing)
+        {
+            base.Dispose(disposing);
+            if (disposing)
+            {
+                _certs?.Dispose();
+                _certs = null;
+            }
         }
     }
 
@@ -295,4 +342,17 @@ internal static class GrpcTransport
         }
         return 0;
     }
+}
+
+/// <summary>
+/// The metadata bag asked for a transport this plugin cannot build — today,
+/// a <c>__bowireMtls__</c> marker whose PEM material does not load. Reported
+/// to the operator as a configuration error, distinct from a server that
+/// rejected the handshake.
+/// </summary>
+public sealed class TransportConfigurationException : Exception
+{
+    public TransportConfigurationException() { }
+    public TransportConfigurationException(string message) : base(message) { }
+    public TransportConfigurationException(string message, Exception innerException) : base(message, innerException) { }
 }

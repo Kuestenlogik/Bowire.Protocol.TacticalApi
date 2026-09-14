@@ -31,12 +31,23 @@ namespace Kuestenlogik.Bowire.Protocol.TacticalApi;
 ///   <c>OwnPose</c> and <c>BlueForceTracking</c>) call the matching method
 ///   through the bundled descriptors. The response is logged, not
 ///   redirected anywhere — the point is "produce realistic traffic against
-///   the target".</item>
+///   the target". Its <c>ResponseHeader</c> is read, though: a replay the
+///   server refused is logged as a warning with the server's reason, not
+///   as a call that took N ms (#66 applies to replay as much as to
+///   invoke).</item>
 ///   <item>Server-streaming steps (the three <c>Subscribe…</c> pumps) open
-///   the stream but consume frames silently. Useful when the replay
-///   timeline wants to hold a subscription open between unary
-///   calls.</item>
+///   the stream and consume frames silently, stopping at the first frame
+///   whose header refuses. Useful when the replay timeline wants to hold
+///   a subscription open between unary calls.</item>
 /// </list>
+/// <para>
+/// The recording's metadata is honoured the way the live plugin honours
+/// it: the first step's bag configures the channel (gRPC-Web, mTLS,
+/// self-signed), and each step's own bag travels as request headers minus
+/// the transport keys. A recording captured over gRPC-Web replays over
+/// gRPC-Web; without that, it dialled the web port with native gRPC and
+/// every step failed before reaching a service.
+/// </para>
 /// <para>
 /// Out of scope (matches the live plugin's contract): client-streaming
 /// and duplex aren't part of the TacticalAPI .proto surface, so steps
@@ -78,7 +89,7 @@ public sealed class TacticalApiMockEmitter : IBowireMockEmitter
         if (steps.Count == 0) return Task.CompletedTask;
 
         var address = GrpcTransport.ResolveGrpcAddress(steps[0].ServerUrl ?? "https://localhost:5118");
-        _channel = GrpcChannel.ForAddress(address);
+        _channel = GrpcChannel.ForAddress(address, GrpcTransport.BuildChannelOptions(ReadOnly(steps[0].Metadata)));
 
         _cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         _schedulerTask = Task.Run(() => RunAsync(steps, options, logger, _cts.Token), _cts.Token);
@@ -164,6 +175,7 @@ public sealed class TacticalApiMockEmitter : IBowireMockEmitter
             requestMarshaller: Marshallers.Create(static d => d, static d => d),
             responseMarshaller: Marshallers.Create(static d => d, static d => d));
 
+        var callOptions = new CallOptions(headers: BuildHeaders(step.Metadata), cancellationToken: ct);
         var sw = Stopwatch.StartNew();
         try
         {
@@ -171,14 +183,27 @@ public sealed class TacticalApiMockEmitter : IBowireMockEmitter
             if (methodDesc.IsServerStreaming)
             {
                 using var call = invoker.AsyncServerStreamingCall(
-                    grpcMethod, host: null, options: new CallOptions(cancellationToken: ct), request: requestBytes);
+                    grpcMethod, host: null, options: callOptions, request: requestBytes);
                 // Drain a few frames so the server sees a real consumer;
                 // we don't redirect them anywhere — the point is realistic
-                // traffic, not a tee.
+                // traffic, not a tee. Each frame carries a header, and a
+                // refusing one ends the drain the way it ends the live pump.
                 var frames = 0;
                 while (frames < 50 && await call.ResponseStream.MoveNext(ct).ConfigureAwait(false))
                 {
                     frames++;
+                    var frame = methodDesc.OutputType.Parser.ParseFrom(call.ResponseStream.Current);
+                    var (refusedFrame, frameReason) = BowireTacticalApiProtocol.ReadRefusal(frame);
+                    if (refusedFrame)
+                    {
+                        sw.Stop();
+                        Interlocked.Increment(ref _refusedSteps);
+                        logger.LogWarning(
+                            "tacticalapi-emit(step={StepId}, {Service}/{Method}) refused by the server on frame {Frame}: {Reason}",
+                            step.Id, serviceDesc.FullName, methodDesc.Name, frames,
+                            frameReason ?? "success = false without an error_message");
+                        return;
+                    }
                 }
                 sw.Stop();
                 logger.LogInformation(
@@ -187,9 +212,23 @@ public sealed class TacticalApiMockEmitter : IBowireMockEmitter
             }
             else
             {
-                await invoker.AsyncUnaryCall(grpcMethod, host: null,
-                    options: new CallOptions(cancellationToken: ct), request: requestBytes).ConfigureAwait(false);
+                var responseBytes = await invoker.AsyncUnaryCall(grpcMethod, host: null,
+                    options: callOptions, request: requestBytes).ConfigureAwait(false);
                 sw.Stop();
+
+                // gRPC said OK; whether the server agreed is in the header.
+                var response = methodDesc.OutputType.Parser.ParseFrom(responseBytes);
+                var (refused, reason) = BowireTacticalApiProtocol.ReadRefusal(response);
+                if (refused)
+                {
+                    Interlocked.Increment(ref _refusedSteps);
+                    logger.LogWarning(
+                        "tacticalapi-emit(step={StepId}, {Service}/{Method}, durationMs={Ms}) refused by the server: {Reason}",
+                        step.Id, serviceDesc.FullName, methodDesc.Name, sw.ElapsedMilliseconds,
+                        reason ?? "success = false without an error_message");
+                    return;
+                }
+
                 logger.LogInformation(
                     "tacticalapi-emit(step={StepId}, {Service}/{Method}, durationMs={Ms})",
                     step.Id, serviceDesc.FullName, methodDesc.Name, sw.ElapsedMilliseconds);
@@ -201,6 +240,36 @@ public sealed class TacticalApiMockEmitter : IBowireMockEmitter
                 "tacticalapi-emit failed for step '{StepId}' on {Service}/{Method}; scheduler continues.",
                 step.Id, serviceDesc.FullName, methodDesc.Name);
         }
+    }
+
+    /// <summary>
+    /// How many replayed steps the server answered with <c>success = false</c>
+    /// so far. A replay is traffic, not a test, so a refusal does not stop
+    /// the scheduler — but a recording that is refused on every loop is
+    /// worth knowing about, and the log alone is easy to miss.
+    /// </summary>
+    public int RefusedSteps => Volatile.Read(ref _refusedSteps);
+
+    private int _refusedSteps;
+
+    private static Dictionary<string, string>? ReadOnly(IDictionary<string, string>? metadata)
+        => metadata is null ? null : new Dictionary<string, string>(metadata, StringComparer.Ordinal);
+
+    /// <summary>
+    /// The step's recorded metadata as request headers, minus what
+    /// configures the transport — the same filter the live invoke applies,
+    /// so a recording never ships a client-cert path to the server.
+    /// </summary>
+    private static Metadata BuildHeaders(IDictionary<string, string>? metadata)
+    {
+        var headers = new Metadata();
+        if (metadata is null) return headers;
+        foreach (var (key, value) in metadata)
+        {
+            if (GrpcTransport.IsTransportKey(key)) continue;
+            headers.Add(key, value);
+        }
+        return headers;
     }
 
     /// <summary>

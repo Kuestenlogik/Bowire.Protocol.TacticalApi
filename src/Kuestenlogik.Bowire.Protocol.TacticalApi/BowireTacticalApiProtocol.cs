@@ -226,7 +226,18 @@ public sealed class BowireTacticalApiProtocol : IBowireProtocol
             new CallOptions(headers: headers, cancellationToken: ct), metadata);
 
         var address = GrpcTransport.ResolveGrpcAddress(serverUrl);
-        var channelOptions = GrpcTransport.BuildChannelOptions(metadata);
+        GrpcChannelOptions channelOptions;
+        try
+        {
+            channelOptions = GrpcTransport.BuildChannelOptions(metadata);
+        }
+        catch (TransportConfigurationException ex)
+        {
+            // The operator's own material did not load — say so before a
+            // single byte goes to the server, in the same result shape a
+            // malformed request gets.
+            return ErrorResult(ex.Message, BadTransportConfigStatus);
+        }
         using var channel = GrpcChannel.ForAddress(address, channelOptions);
         var invoker = channel.CreateCallInvoker();
         var sw = Stopwatch.StartNew();
@@ -301,6 +312,9 @@ public sealed class BowireTacticalApiProtocol : IBowireProtocol
 
     /// <summary>Status on the final frame when <c>streamIdleSeconds</c> ended a subscription.</summary>
     internal const string StreamIdleStatus = "tacticalapi:stream-idle";
+
+    /// <summary>Status when the metadata bag's transport configuration (mTLS material) could not be built.</summary>
+    internal const string BadTransportConfigStatus = "bad-transport-config";
 
     /// <summary>
     /// Read the <c>ResponseHeader</c> every TacticalAPI response embeds, and
@@ -474,8 +488,22 @@ public sealed class BowireTacticalApiProtocol : IBowireProtocol
         var idleSeconds = GrpcTransport.ReadPositiveSeconds(metadata, GrpcTransport.StreamIdleSecondsKey);
 
         var address = GrpcTransport.ResolveGrpcAddress(serverUrl);
-        var channelOptions = GrpcTransport.BuildChannelOptions(metadata);
-        using var channel = GrpcChannel.ForAddress(address, channelOptions);
+        GrpcChannelOptions? channelOptions = null;
+        string? transportError = null;
+        try
+        {
+            channelOptions = GrpcTransport.BuildChannelOptions(metadata);
+        }
+        catch (TransportConfigurationException ex)
+        {
+            transportError = ex.Message;
+        }
+        if (transportError is not null)
+        {
+            yield return $$"""{ "error": {{System.Text.Json.JsonSerializer.Serialize(transportError)}}, "status": "{{BadTransportConfigStatus}}" }""";
+            yield break;
+        }
+        using var channel = GrpcChannel.ForAddress(address, channelOptions!);
         using var call = channel.CreateCallInvoker()
             .AsyncServerStreamingCall(grpcMethod, host: null, options: callOptions, request: requestBytes);
 

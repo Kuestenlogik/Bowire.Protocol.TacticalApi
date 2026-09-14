@@ -3,6 +3,7 @@
 
 using Google.Protobuf;
 using Kuestenlogik.Bowire.Mocking;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Rheinmetall.TacticalApi.V0;
 
@@ -164,6 +165,111 @@ public sealed class TacticalApiMockEmitterE2ETests
         Assert.Contains("Wiederholer", read.Response, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task StartAsync_CountsAReplayTheServerRefused()
+    {
+        // gRPC answers OK and the body carries success = false. The emitter
+        // used to log that as a call that took N ms; now it is a warning
+        // with the server's reason, and the count is readable so a
+        // recording refused on every loop is not a secret (#66 for replay).
+        var recording = new BowireRecording
+        {
+            Steps =
+            {
+                MakeStep("refused", DateTimeOffset.UtcNow, _server.ServerUrl,
+                    service: "Situation", method: "AddOrUpdateSituationObjects",
+                    body: """
+                          {
+                            "situationObjects": [
+                              { "symbol": { "identity": { "uuidIdentity": "replay-no-reporter" } } }
+                            ]
+                          }
+                          """),
+                MakeUnaryStep("fine", DateTimeOffset.UtcNow.AddMilliseconds(10), _server.ServerUrl),
+            },
+        };
+
+        var log = new CapturingLogger();
+        await using var emitter = new TacticalApiMockEmitter();
+        await emitter.StartAsync(
+            recording, new MockEmitterOptions { ReplaySpeed = 10.0 }, log, CancellationToken.None);
+        await Task.Delay(800, TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, emitter.RefusedSteps);
+        var warning = Assert.Single(log.Entries, e => e.Level == LogLevel.Warning);
+        Assert.Contains(IntegrationSituationService.MissingReporterMessage, warning.Message, StringComparison.Ordinal);
+        Assert.Contains("refused", warning.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task StartAsync_StopsDrainingAtARefusingFrame()
+    {
+        var recording = new BowireRecording
+        {
+            Steps =
+            {
+                MakeStep("refused-stream", DateTimeOffset.UtcNow, _server.ServerUrl,
+                    service: "OwnPose", method: "SubscribePositionChangedEvents", body: "{}",
+                    metadata: new Dictionary<string, string> { [IntegrationOwnPoseService.RefuseHeader] = "1" }),
+            },
+        };
+
+        var log = new CapturingLogger();
+        await using var emitter = new TacticalApiMockEmitter();
+        await emitter.StartAsync(
+            recording, new MockEmitterOptions { ReplaySpeed = 10.0 }, log, CancellationToken.None);
+        await Task.Delay(800, TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, emitter.RefusedSteps);
+        var warning = Assert.Single(log.Entries, e => e.Level == LogLevel.Warning);
+        Assert.Contains(IntegrationOwnPoseService.RefusalMessage, warning.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task StartAsync_ReplaysOverGrpcWeb_WhenTheRecordingWasCapturedThatWay()
+    {
+        // A recording captured against TacNet's :4268 carries useGrpcWeb in
+        // its metadata. The emitter used to open a bare channel regardless,
+        // so every step failed on the HTTP/1.1 port before reaching a
+        // service. The write landing on the web-only port proves the
+        // channel took the recorded transport.
+        var recording = new BowireRecording
+        {
+            Steps =
+            {
+                MakeStep("bf-web", DateTimeOffset.UtcNow, _server.GrpcWebServerUrl,
+                    service: "BlueForceTracking", method: "AddOrUpdateBlueForces",
+                    body: """
+                          {
+                            "blueForcesToUpdates": [
+                              { "identity": { "stringIdentity": "bf-replayed-web" }, "callsign": "Webwiederholer" }
+                            ]
+                          }
+                          """,
+                    metadata: new Dictionary<string, string> { [GrpcTransport.UseGrpcWebKey] = "true" }),
+            },
+        };
+
+        var log = new CapturingLogger();
+        await using var emitter = new TacticalApiMockEmitter();
+        await emitter.StartAsync(
+            recording, new MockEmitterOptions { ReplaySpeed = 10.0 }, log, CancellationToken.None);
+        await Task.Delay(800, TestContext.Current.CancellationToken);
+
+        Assert.DoesNotContain(log.Entries, e => e.Level == LogLevel.Warning);
+        Assert.Equal(0, emitter.RefusedSteps);
+
+        var plugin = new BowireTacticalApiProtocol();
+        var read = await plugin.InvokeAsync(
+            _server.ServerUrl.Replace("http://", "grpc://", StringComparison.Ordinal),
+            "BlueForceTracking", "GetBlueForces",
+            jsonMessages: ["{}"], showInternalServices: false,
+            metadata: null, ct: TestContext.Current.CancellationToken);
+
+        Assert.Equal("OK", read.Status);
+        Assert.Contains("Webwiederholer", read.Response, StringComparison.Ordinal);
+    }
+
     private static BowireRecordingStep MakeUnaryStep(
         string id, DateTimeOffset capturedAt, string serverUrl)
     {
@@ -200,7 +306,8 @@ public sealed class TacticalApiMockEmitterE2ETests
 
     private static BowireRecordingStep MakeStep(
         string id, DateTimeOffset capturedAt, string serverUrl,
-        string service, string method, string body)
+        string service, string method, string body,
+        Dictionary<string, string>? metadata = null)
         => new()
         {
             Id = id,
@@ -209,6 +316,23 @@ public sealed class TacticalApiMockEmitterE2ETests
             Service = service,
             Method = method,
             Body = body,
+            Metadata = metadata,
             CapturedAt = capturedAt.ToUnixTimeMilliseconds(),
         };
+
+    /// <summary>
+    /// The emitter reports through its logger and nowhere else, so the
+    /// tests read the log. Warnings are what the refusal path writes.
+    /// </summary>
+    private sealed class CapturingLogger : ILogger
+    {
+        public List<(LogLevel Level, string Message)> Entries { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            lock (Entries) Entries.Add((logLevel, formatter(state, exception)));
+        }
+    }
 }
