@@ -69,7 +69,8 @@ dotnet test  -c Release
 A runnable sample lives in this repo under
 [`samples/Kuestenlogik.Bowire.Protocol.TacticalApi.Sample`](samples/Kuestenlogik.Bowire.Protocol.TacticalApi.Sample)
 — a self-contained mini gRPC server serving all three services (thirteen
-MIL-2525C tracks, four blue forces, and its own pose), with the Bowire
+MIL-2525C tracks under seven 2525D control measures, four blue forces,
+and its own pose), with the Bowire
 workbench embedded alongside it. `dotnet run`, open
 <http://localhost:5191/bowire>, and the TacticalAPI tab has live data to
 discover, invoke against, subscribe to and — for `OwnPose` and
@@ -95,7 +96,7 @@ CI and a laptop run exactly the same pass.
 - Shared `__bowireMtls__` marker integration alongside the legacy `_bowire:` keys.
 - Settings: `invocationDeadlineSeconds` (unary), `streamIdleSeconds` (subscriptions), `allowSelfSignedCerts`, `useGrpcWeb` — each documented with what it does and what comes back in [the protocol page](docs/protocol.md#settings).
 - `IBowireMockEmitter` and `IBowireStreamingWithWireBytes`, so recordings tagged `protocol: "tacticalapi"` replay through `bowire mock` — subscriptions included.
-- A combined sample — thirteen tracks, four blue forces, an own pose, all three services readable and writable, refusing the way a real server refuses — with its own test project pinning what its README promises.
+- A combined sample — thirteen tracks, seven control measures (lines, areas, an arrow, a corridor, a sector, an ellipse — one per `SymbolLocation` case), four blue forces, an own pose, all three services readable and writable, refusing the way a real server refuses — with its own test project pinning what its README promises.
 
 ## Upstream proto pinning
 

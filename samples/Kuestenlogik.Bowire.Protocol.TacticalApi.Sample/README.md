@@ -1,9 +1,9 @@
 # Kuestenlogik.Bowire.Protocol.TacticalApi.Sample
 
 The canonical TacticalAPI demo — **thirteen MIL-2525C tracks in five
-groups**, **four blue forces**, and **this host's own pose**, across the
-western Baltic and the Schleswig-Holstein coast, broadcast every two
-seconds — combined so it demonstrates **both** ways Bowire meets a
+groups** under **seven 2525D control measures**, **four blue forces**, and
+**this host's own pose**, across the western Baltic and the
+Schleswig-Holstein coast, broadcast every two seconds — combined so it demonstrates **both** ways Bowire meets a
 TacticalAPI server, from one project:
 
 - **Embedded** — the RadarSweep gRPC server runs in-process, and the
@@ -21,7 +21,7 @@ All three upstream services are served:
 
 | Service | What it does here |
 |---|---|
-| `Situation` | Read **and write**. The thirteen tracks, as one snapshot per frame — and symbols the operator adds, changes and deletes beside them. |
+| `Situation` | Read **and write**. The thirteen tracks and the seven control measures, as one snapshot per frame — and symbols the operator adds, changes and deletes beside them. |
 | `OwnPose` | Read **and write**. Where this host is, and a way to tell it otherwise. |
 | `BlueForceTracking` | Read **and write**. Friendly participants that report themselves, with keep-alive expiry. |
 
@@ -34,6 +34,7 @@ All three upstream services are served:
 | **Convoy Bravo** | 2 friendly | South at 16 m/s, 80 m apart |
 | **UAV Kite** | 1 friendly | Orbiting the Bay of Lübeck, 2.5 km radius, a rotation every 90 s |
 | **Engagement** | 2 friendly + 2 hostile | Two pairs closing head-on, so the trajectories cross |
+| **Overlay** | 7 control measures (6 friendly + 1 hostile) | Static. The lines, areas, arrow, corridor, sector and ellipse the tracks operate under — see below |
 | **Blue forces** | 4 friendly, on `BlueForceTracking` | A static command post, this host's own vehicle, a UAV mounted on it, and a dismounted section at walking pace |
 
 The groups are deliberately unlike each other — different places, speeds,
@@ -51,6 +52,38 @@ resolved per array element, not once per frame.
 
 The DIS sample in `Bowire.Protocol.Dis` is deliberately the mirror image:
 one entity per PDU, grouped across frames.
+
+## The overlay is geometry, not points
+
+A track is a point, and a point is the one shape a symbol renderer draws
+from the code alone. The rest of what MIL-STD-2525 calls a tactical
+graphic is drawn from its geometry, and the TacticalAPI `SymbolLocation`
+has a case for each kind. The overlay uses one graphic per case the
+standard has a symbol for, so a consumer that handles the cases one at a
+time can see which one it has not reached yet:
+
+| Graphic | 2525D code | `SymbolLocation` case | Where |
+|---|---|---|---|
+| Boundary, battalion | `10032500161101000000` | `line`, 4 points | North–south between the convoys' ground and the engagement |
+| Phase Line *PL HANSE* | `10032500001403000000` | `line`, 4 points | East–west across the engagement's line of advance |
+| Assembly Area *AA BUCHE* | `10032500001502000000` | `polygon`, 5 points | Around Convoy Alpha's origin |
+| Axis of Advance, main attack *AXIS BLAU* | `10032500001514030000` | `multipoint`, 3 path points + 1 width point | Blau's attack, south-east onto Rot |
+| Air Corridor *AC KITE* | `10032500001701000000` | `corridor`, 3 points, 2 000 m wide | From the coast out to the UAV's orbit |
+| Sensor Range Fan *Radar Wismar* | `10032500002422000000` | `fan`, 1–12 km, 300°–030° | The sector the sweep-centre radar watches, over the water |
+| Defended Area, hostile | `10062500002002010000` | `ellipse`, centre + one point per axis | Offshore to the north-east — the overlay's one red graphic |
+
+Two things are deliberate. The codes are **2525D in the twenty-digit
+numeric form** — `symbolIdentifier.content.numericIdentifier` with
+`firstTenDigits` / `secondTenDigits`, `symbolCatalog` =
+`SYMBOL_CATALOG_MIL2525_D` — where the tracks use fifteen-letter 2525C
+strings, so the numeric path a real producer sends is exercised too; a
+consumer reassembles the code by formatting each half with ten digits.
+And **nothing in the overlay moves**: control measures are planned, not
+observed, and they carry no motion for the tick to apply.
+
+`routeLocation` and `sketchLocation` are left out on purpose — a route is
+its own situation-object type upstream, and a sketch carries its own
+colour and line style instead of a symbol code.
 
 ## Blue forces are not situation objects with another name
 

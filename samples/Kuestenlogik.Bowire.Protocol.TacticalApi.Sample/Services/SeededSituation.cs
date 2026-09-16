@@ -8,7 +8,9 @@ namespace Kuestenlogik.Bowire.Protocol.TacticalApi.Sample.Services;
 
 /// <summary>
 /// Seeds the demo scenario: thirteen MIL-2525C tracks in five groups,
-/// spread across the western Baltic and the Schleswig-Holstein coast.
+/// spread across the western Baltic and the Schleswig-Holstein coast, and
+/// the overlay of seven 2525D control measures laid over them
+/// (<see cref="SeededOverlay"/>).
 /// </summary>
 /// <remarks>
 /// <para>
@@ -36,6 +38,12 @@ namespace Kuestenlogik.Bowire.Protocol.TacticalApi.Sample.Services;
 /// arrive in ONE frame, so anything grouping them has to resolve an
 /// identity per array element. The DIS sample in Bowire.Protocol.Dis is
 /// deliberately the opposite — one entity per PDU, grouped across frames.
+/// </para>
+/// <para>
+/// The overlay rides in the same array, so the frame mixes the two
+/// things a consumer has to keep apart: entities that are a point and
+/// move, and graphics that are a geometry and do not. Only the former
+/// have a <see cref="TrackMotion"/>.
 /// </para>
 /// </remarks>
 internal static class SeededSituation
@@ -126,6 +134,10 @@ internal static class SeededSituation
                 new LegMotion(54.24, 10.83, BearingDegrees: 315, MetresPerSecond: 9.0,
                               HeadStartMetres: i * 90.0));
         }
+
+        // --- Overlay: the control measures the tracks operate under ---
+        // Static, no motion entry; the tick leaves them alone.
+        SeededOverlay.AddTo(objects, reporter, now);
 
         return (objects, motions);
     }
