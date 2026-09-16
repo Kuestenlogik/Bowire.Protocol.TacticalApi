@@ -68,10 +68,24 @@ The plugin declares four settings (Settings → TacticalAPI). The workbench deli
 |---|---|---|
 | `invocationDeadlineSeconds` | `0` (off) | gRPC deadline for **unary** calls. Bounds a cold connect against a server that hangs. Not applied to subscriptions &mdash; a deadline on a stream would end every subscription on the clock. |
 | `streamIdleSeconds` | `0` (off) | Ends a subscription after this many seconds **without a frame**. The pump closes with one last frame carrying `"status": "tacticalapi:stream-idle"` and the reason, so the frame pane shows why it stopped rather than looking like the server hung up. |
-| `allowSelfSignedCerts` | `false` | Skip server-certificate validation. Staging and self-signed only. |
+| `allowSelfSignedCerts` | `false` | Skip server-certificate validation. Staging and self-signed only. Unlike the core's own relaxation this is not limited to loopback &mdash; a TacticalAPI staging server is never localhost &mdash; so every unary result it applied to carries `_tacticalapi:warning` saying so. |
 | `useGrpcWeb` | `false` | Speak gRPC-Web over HTTP/1.1 instead of native gRPC over HTTP/2 &mdash; see [Two ports](#two-ports-native-grpc-and-grpc-web). |
 
 Anything else in the metadata bag travels as a gRPC request header, except the transport keys below.
+
+### What comes back
+
+Every unary result carries its own metadata next to the response body:
+
+| Key | When | Meaning |
+|---|---|---|
+| `_tacticalapi:objectCount` | the response has a repeated field | How many objects it holds &mdash; the summed lengths of `situation_objects`, `blue_forces` and the like. A live TacNet answers `GetSituationObjects` with thousands in one JSON document; the count is there before the workbench tries to render it. |
+| `_tacticalapi:responseBytes` | always on a gRPC-level success | Size of the response on the wire. |
+| `_tacticalapi:errorMessage` | the server refused | The server's own wording &mdash; see [A refused write is not a transport error](#writing-to-tacticalapi). |
+| `_tacticalapi:warning` | certificate validation was off | Which host was dialled with any certificate accepted. |
+| `_trailer:<name>` | the call failed at the gRPC level | The gRPC trailers, namespaced the way the core gRPC plugin does it. |
+
+Streamed frames carry no metadata of their own; a frame that is not data &mdash; a refusal, the idle timeout, an unloadable transport &mdash; says so in its JSON with a `status` field. The plugin also implements the core's `IBowireStreamingWithWireBytes`, so the recorder keeps every server frame's wire bytes and `bowire mock` can serve a recorded subscription 1:1 &mdash; the bytes cannot be rebuilt from JSON, because Google.Protobuf's C# library has no `DynamicMessage`.
 
 ### mTLS / TLS
 

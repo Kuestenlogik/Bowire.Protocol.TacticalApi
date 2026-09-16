@@ -1,6 +1,8 @@
 // Copyright 2026 Küstenlogik
 // SPDX-License-Identifier: Apache-2.0
 
+using System.Text.Json;
+using Google.Protobuf;
 using Rheinmetall.TacticalApi.V0;
 
 namespace Kuestenlogik.Bowire.Protocol.TacticalApi.Tests.Integration;
@@ -503,4 +505,101 @@ public sealed class TacticalApiRoundTripE2ETests : IClassFixture<InProcessTactic
     /// </summary>
     private string GrpcUrl() =>
         _server.ServerUrl.Replace("http://", "grpc://", StringComparison.Ordinal);
+
+    [Fact]
+    public async Task InvokeStreamWithFrames_carries_the_wire_bytes_of_every_server_frame()
+    {
+        // The recorder keeps the bytes so the mock server can replay a
+        // subscription 1:1. Each frame's bytes must be the frame the JSON
+        // was rendered from — parse them back and format them again.
+        var plugin = new BowireTacticalApiProtocol();
+        var ct = TestContext.Current.CancellationToken;
+
+        var frames = new List<StreamFrame>();
+        await foreach (var frame in plugin.InvokeStreamWithFramesAsync(
+            GrpcUrl(), "Situation", "SubscribeSituationObjectEvents",
+            jsonMessages: ["{}"], showInternalServices: false, metadata: null, ct: ct).ConfigureAwait(false))
+        {
+            frames.Add(frame);
+        }
+
+        Assert.Equal(2, frames.Count);
+        foreach (var frame in frames)
+        {
+            Assert.NotNull(frame.Binary);
+            var parsed = SubscribeSituationObjectEventsResponse.Parser.ParseFrom(frame.Binary);
+            Assert.Equal(JsonFormatter.Default.Format(parsed), frame.Json);
+        }
+        Assert.Contains("stream-frame-0", frames[0].Json, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task InvokeStreamWithFrames_a_refusal_carries_the_servers_frame_as_bytes_and_an_idle_frame_carries_none()
+    {
+        var plugin = new BowireTacticalApiProtocol();
+        var ct = TestContext.Current.CancellationToken;
+
+        // Refusal: the JSON is this plugin's envelope, the bytes are the
+        // server's frame — a replay refuses the way the server did.
+        var refused = new List<StreamFrame>();
+        await foreach (var frame in plugin.InvokeStreamWithFramesAsync(
+            GrpcUrl(), "OwnPose", "SubscribePositionChangedEvents",
+            jsonMessages: ["{}"], showInternalServices: false,
+            metadata: new Dictionary<string, string> { [IntegrationOwnPoseService.RefuseHeader] = "1" },
+            ct: ct).ConfigureAwait(false))
+        {
+            refused.Add(frame);
+        }
+        var only = Assert.Single(refused);
+        Assert.Contains(BowireTacticalApiProtocol.RefusedStatus, only.Json, StringComparison.Ordinal);
+        Assert.NotNull(only.Binary);
+        var serverFrame = SubscribePositionEventsResponse.Parser.ParseFrom(only.Binary);
+        Assert.False(serverFrame.Header.Success);
+        Assert.Equal(IntegrationOwnPoseService.RefusalMessage, serverFrame.Header.ErrorMessage);
+
+        // Idle: nothing the server sent, so nothing to replay.
+        var idled = new List<StreamFrame>();
+        await foreach (var frame in plugin.InvokeStreamWithFramesAsync(
+            GrpcUrl(), "OwnPose", "SubscribePositionChangedEvents",
+            jsonMessages: ["{}"], showInternalServices: false,
+            metadata: new Dictionary<string, string>
+            {
+                [IntegrationOwnPoseService.StallHeader] = "1",
+                [GrpcTransport.StreamIdleSecondsKey] = "1",
+            },
+            ct: ct).ConfigureAwait(false))
+        {
+            idled.Add(frame);
+        }
+        Assert.Equal(3, idled.Count);
+        Assert.NotNull(idled[0].Binary);
+        Assert.Contains(BowireTacticalApiProtocol.StreamIdleStatus, idled[2].Json, StringComparison.Ordinal);
+        Assert.Null(idled[2].Binary);
+    }
+
+    [Fact]
+    public async Task Invoke_reports_the_object_count_and_the_wire_size_in_the_metadata()
+    {
+        // A live TacNet answers GetSituationObjects with thousands of objects
+        // in one JSON document. The count is on the result before the
+        // workbench tries to render it.
+        var plugin = new BowireTacticalApiProtocol();
+        var ct = TestContext.Current.CancellationToken;
+
+        var result = await plugin.InvokeAsync(
+            GrpcUrl(), "Situation", "GetSituationObjects",
+            jsonMessages: ["{}"], showInternalServices: false, metadata: null, ct: ct);
+
+        Assert.Equal("OK", result.Status);
+        using var doc = JsonDocument.Parse(result.Response!);
+        var inBody = doc.RootElement.GetProperty("situationObjects").GetArrayLength();
+        Assert.Equal(inBody.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            result.Metadata[BowireTacticalApiProtocol.ObjectCountKey]);
+        Assert.Equal(result.ResponseBinary!.Length.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            result.Metadata[BowireTacticalApiProtocol.ResponseBytesKey]);
+
+        // Plaintext to the fixture: certificate validation never came up, so
+        // no warning about it.
+        Assert.DoesNotContain(BowireTacticalApiProtocol.WarningKey, result.Metadata.Keys);
+    }
 }

@@ -137,6 +137,22 @@ internal static class GrpcTransport
     }
 
     /// <summary>
+    /// True when the metadata bag turns server-certificate validation off,
+    /// by any of the three opt-ins that mean it: the <c>allowSelfSignedCerts</c>
+    /// setting, the legacy <c>_bowire:tls-skip-validation</c> key, or the
+    /// shared marker's <c>allowSelfSigned</c>. The same union
+    /// <see cref="BuildChannelOptions"/> installs; exposed so a caller can say
+    /// so on the result.
+    /// </summary>
+    internal static bool AcceptsAnyServerCertificate(IReadOnlyDictionary<string, string>? metadata)
+    {
+        if (metadata is null) return false;
+        if (TryGetBool(metadata, AllowSelfSignedCertsKey, out var allowSelfSigned) && allowSelfSigned) return true;
+        if (TryGetBool(metadata, TlsSkipValidationKey, out var skipValidation) && skipValidation) return true;
+        return MtlsConfig.TryParseFromMetadata(metadata) is { AllowSelfSigned: true };
+    }
+
+    /// <summary>
     /// Builds <see cref="GrpcChannelOptions"/> for the configured transport
     /// behaviour. The metadata bag drives the optional settings; an empty /
     /// null bag produces a no-options default that uses .NET's stock HTTPS

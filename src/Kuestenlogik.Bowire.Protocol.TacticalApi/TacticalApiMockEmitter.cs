@@ -243,6 +243,15 @@ public sealed class TacticalApiMockEmitter : IBowireMockEmitter
     }
 
     /// <summary>
+    /// Completes when the replay has run its course — every step emitted once,
+    /// or, with <see cref="MockEmitterOptions.Loop"/>, when it was cancelled.
+    /// Before <see cref="StartAsync"/>, or for a recording with no step of
+    /// this protocol, already complete. A caller that wants to know the
+    /// traffic has gone out awaits this rather than guessing a delay.
+    /// </summary>
+    public Task Completion => _schedulerTask ?? Task.CompletedTask;
+
+    /// <summary>
     /// How many replayed steps the server answered with <c>success = false</c>
     /// so far. A replay is traffic, not a test, so a refusal does not stop
     /// the scheduler — but a recording that is refused on every loop is

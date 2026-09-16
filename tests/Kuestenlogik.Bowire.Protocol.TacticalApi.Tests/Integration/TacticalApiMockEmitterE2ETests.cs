@@ -51,10 +51,9 @@ public sealed class TacticalApiMockEmitterE2ETests
             NullLogger.Instance,
             CancellationToken.None);
 
-        // Wait briefly for the in-process scheduler task to drain.
-        // The single-step recording completes in < 100 ms; 2 s is
-        // plenty of margin without slowing the suite materially.
-        await Task.Delay(500, TestContext.Current.CancellationToken);
+        // Completion is the scheduler task itself: it ends when the last
+        // step has gone out, so the test waits for a fact, not a delay.
+        await emitter.Completion.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -79,7 +78,7 @@ public sealed class TacticalApiMockEmitterE2ETests
             NullLogger.Instance,
             CancellationToken.None);
 
-        await Task.Delay(800, TestContext.Current.CancellationToken);
+        await emitter.Completion.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -106,7 +105,7 @@ public sealed class TacticalApiMockEmitterE2ETests
             NullLogger.Instance,
             CancellationToken.None);
 
-        await Task.Delay(500, TestContext.Current.CancellationToken);
+        await emitter.Completion.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -152,7 +151,7 @@ public sealed class TacticalApiMockEmitterE2ETests
             NullLogger.Instance,
             CancellationToken.None);
 
-        await Task.Delay(800, TestContext.Current.CancellationToken);
+        await emitter.Completion.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
 
         var plugin = new BowireTacticalApiProtocol();
         var read = await plugin.InvokeAsync(
@@ -193,7 +192,7 @@ public sealed class TacticalApiMockEmitterE2ETests
         await using var emitter = new TacticalApiMockEmitter();
         await emitter.StartAsync(
             recording, new MockEmitterOptions { ReplaySpeed = 10.0 }, log, CancellationToken.None);
-        await Task.Delay(800, TestContext.Current.CancellationToken);
+        await emitter.Completion.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
 
         Assert.Equal(1, emitter.RefusedSteps);
         var warning = Assert.Single(log.Entries, e => e.Level == LogLevel.Warning);
@@ -218,7 +217,7 @@ public sealed class TacticalApiMockEmitterE2ETests
         await using var emitter = new TacticalApiMockEmitter();
         await emitter.StartAsync(
             recording, new MockEmitterOptions { ReplaySpeed = 10.0 }, log, CancellationToken.None);
-        await Task.Delay(800, TestContext.Current.CancellationToken);
+        await emitter.Completion.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
 
         Assert.Equal(1, emitter.RefusedSteps);
         var warning = Assert.Single(log.Entries, e => e.Level == LogLevel.Warning);
@@ -254,7 +253,7 @@ public sealed class TacticalApiMockEmitterE2ETests
         await using var emitter = new TacticalApiMockEmitter();
         await emitter.StartAsync(
             recording, new MockEmitterOptions { ReplaySpeed = 10.0 }, log, CancellationToken.None);
-        await Task.Delay(800, TestContext.Current.CancellationToken);
+        await emitter.Completion.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
 
         Assert.DoesNotContain(log.Entries, e => e.Level == LogLevel.Warning);
         Assert.Equal(0, emitter.RefusedSteps);
