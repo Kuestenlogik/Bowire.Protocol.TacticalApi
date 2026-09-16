@@ -3,7 +3,7 @@
 [![CI](https://img.shields.io/github/actions/workflow/status/Kuestenlogik/Bowire.Protocol.TacticalApi/ci.yml?branch=main&label=CI)](https://github.com/Kuestenlogik/Bowire.Protocol.TacticalApi/actions/workflows/ci.yml)
 [![NuGet](https://img.shields.io/nuget/v/Kuestenlogik.Bowire.Protocol.TacticalApi)](https://www.nuget.org/packages/Kuestenlogik.Bowire.Protocol.TacticalApi)
 [![License](https://img.shields.io/github/license/Kuestenlogik/Bowire.Protocol.TacticalApi)](https://github.com/Kuestenlogik/Bowire.Protocol.TacticalApi/blob/main/LICENSE)
-[![Bowire](https://img.shields.io/badge/Bowire-%E2%89%A5%202.2.1%2C%20%3C%203.0-006B9F)](https://github.com/Kuestenlogik/Bowire/blob/main/docs/architecture/compatibility.md)
+[![Bowire](https://img.shields.io/badge/Bowire-%E2%89%A5%202.7.0%2C%20%3C%203.0-006B9F)](https://github.com/Kuestenlogik/Bowire/blob/main/docs/architecture/compatibility.md)
 
 Bowire protocol plugin for Rheinmetall's **[TacticalAPI](https://github.com/Rheinmetall/tacticalapi)** — a gRPC interface for situational-awareness systems. The plugin bundles the upstream service schema so users get a typed discovery sidebar and invoke pane against any TacticalAPI server, **even when the server does not expose gRPC Server Reflection**.
 
@@ -13,7 +13,10 @@ Bowire protocol plugin for Rheinmetall's **[TacticalAPI](https://github.com/Rhei
 - **Every upstream service** — `Situation` (situational-awareness objects), `OwnPose` (the reporting platform's own position) and `BlueForceTracking` (friendly participants reporting themselves). Which services exist is a one-line list in the plugin, so an upstream addition lands in discovery, invoke, streaming and mock replay at once rather than service by service.
 - **Drop-in protocol tab** — once installed, Bowire shows a `TacticalAPI` tab next to gRPC / REST / SignalR. Connect via `bowire --url tacticalapi@<host:port>`.
 - **Server-streaming aware** — each service has a `Subscribe…` pump (`SubscribeSituationObjectEvents`, `SubscribePositionChangedEvents`, `SubscribeBlueForceEvents`); the plugin surfaces them as streaming methods, not unary calls. Client-streaming and duplex aren't part of the TacticalAPI surface (no upstream RPC defines them) and the plugin rejects callers that try.
-- **mTLS via the shared `__bowireMtls__` marker** — same auth profile that REST / gRPC / Kafka / AMQP read; PEM cert + key + optional CA + allow-self-signed. The legacy `_bowire:client-cert-pfx` / `_bowire:client-cert-password` / `_bowire:tls-skip-validation` keys stay supported for callers that pinned against the pre-1.0 vocabulary.
+- **A refusal is reported as one** — TacticalAPI says no with an ordinary gRPC `OK` whose `ResponseHeader` carries `success = false`. The plugin reads that header on every unary reply and every streamed frame and reports `tacticalapi:refused` with the server's wording in the response metadata, the way Rheinmetall's own reference client treats it.
+- **Both wires** — native gRPC over HTTP/2 by default, gRPC-Web over HTTP/1.1 on the `useGrpcWeb` setting (or the core's shared `__bowireGrpcTransport=web` marker). TacNet exposes both, on `:4267` and `:4268`.
+- **mTLS via the shared `__bowireMtls__` marker** — same auth profile that REST / gRPC / Kafka / AMQP read; PEM cert + key, passphrase for an encrypted key, optional CA for pinning, allow-self-signed. The legacy `_bowire:client-cert-pfx` / `_bowire:client-cert-password` / `_bowire:tls-skip-validation` keys stay supported for callers that pinned against the pre-1.0 vocabulary.
+- **Recordable and replayable** — every unary reply and every streamed frame is recorded with its wire bytes, so `bowire mock` serves a recorded session 1:1; the emitter replays a recording against a live server, over the transport it was captured on, and reports what the server refused.
 
 ## Licensing — please read
 
@@ -84,13 +87,15 @@ Kestrel + gRPC stub of all three services for end-to-end discovery
 + invoke + stream + write round-trips — no Docker daemon needed, so
 CI and a laptop run exactly the same pass.
 
-## What's in 1.0
+## What's in the box
 
 - Bundled-schema discovery (no Server Reflection required on the target).
-- Unary invoke + server-streaming subscribe for every upstream service — `Situation`, `OwnPose` and `BlueForceTracking`.
+- Unary invoke + server-streaming subscribe for every upstream service — `Situation`, `OwnPose` and `BlueForceTracking` — with the contract's `Required:` fields marked required in the invoke form and the `ResponseHeader` read on every reply.
+- Native gRPC and gRPC-Web.
 - Shared `__bowireMtls__` marker integration alongside the legacy `_bowire:` keys.
-- Plugin-tunable knobs: `invocationDeadlineSeconds`, `streamIdleSeconds`, `allowSelfSignedCerts`.
-- IBowireMockEmitter so recordings tagged `protocol: "tacticalapi"` replay through `bowire mock`.
+- Settings: `invocationDeadlineSeconds` (unary), `streamIdleSeconds` (subscriptions), `allowSelfSignedCerts`, `useGrpcWeb` — each documented with what it does and what comes back in [the protocol page](docs/protocol.md#settings).
+- `IBowireMockEmitter` and `IBowireStreamingWithWireBytes`, so recordings tagged `protocol: "tacticalapi"` replay through `bowire mock` — subscriptions included.
+- A combined sample — thirteen tracks, four blue forces, an own pose, all three services readable and writable, refusing the way a real server refuses — with its own test project pinning what its README promises.
 
 ## Upstream proto pinning
 
