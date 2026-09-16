@@ -179,6 +179,16 @@ public sealed class TacticalApiMockEmitterTests
 
         await emitter.StartAsync(
             rec, new MockEmitterOptions(), NullLogger.Instance, CancellationToken.None);
+
+        // Nothing to replay is a replay that has run its course.
+        Assert.True(emitter.Completion.IsCompletedSuccessfully);
+    }
+
+    [Fact]
+    public async Task Completion_is_already_complete_before_StartAsync()
+    {
+        await using var emitter = new TacticalApiMockEmitter();
+        Assert.True(emitter.Completion.IsCompletedSuccessfully);
     }
 
     [Fact]

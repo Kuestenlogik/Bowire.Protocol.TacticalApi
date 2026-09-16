@@ -202,4 +202,34 @@ public sealed class GrpcTransportTests
         Assert.Equal(0, GrpcTransport.ReadPositiveSeconds(
             new Dictionary<string, string>(), GrpcTransport.StreamIdleSecondsKey));
     }
+
+    [Fact]
+    public void AcceptsAnyServerCertificate_IsTheUnionOfTheThreeOptIns()
+    {
+        Assert.False(GrpcTransport.AcceptsAnyServerCertificate(null));
+        Assert.False(GrpcTransport.AcceptsAnyServerCertificate(new Dictionary<string, string>()));
+        Assert.False(GrpcTransport.AcceptsAnyServerCertificate(new Dictionary<string, string>
+        {
+            [GrpcTransport.AllowSelfSignedCertsKey] = "false",
+        }));
+
+        Assert.True(GrpcTransport.AcceptsAnyServerCertificate(new Dictionary<string, string>
+        {
+            [GrpcTransport.AllowSelfSignedCertsKey] = "true",
+        }));
+        Assert.True(GrpcTransport.AcceptsAnyServerCertificate(new Dictionary<string, string>
+        {
+            [GrpcTransport.TlsSkipValidationKey] = "true",
+        }));
+        Assert.True(GrpcTransport.AcceptsAnyServerCertificate(new Dictionary<string, string>
+        {
+            [Kuestenlogik.Bowire.Auth.MtlsConfig.MtlsMarkerKey] =
+                """{ "certificate": "x", "privateKey": "y", "allowSelfSigned": true }""",
+        }));
+        Assert.False(GrpcTransport.AcceptsAnyServerCertificate(new Dictionary<string, string>
+        {
+            [Kuestenlogik.Bowire.Auth.MtlsConfig.MtlsMarkerKey] =
+                """{ "certificate": "x", "privateKey": "y" }""",
+        }));
+    }
 }

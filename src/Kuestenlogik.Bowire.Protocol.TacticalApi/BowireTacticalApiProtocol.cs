@@ -29,7 +29,7 @@ namespace Kuestenlogik.Bowire.Protocol.TacticalApi;
 /// contract, not a pre-1.0 hedge.
 /// </para>
 /// </summary>
-public sealed class BowireTacticalApiProtocol : IBowireProtocol
+public sealed class BowireTacticalApiProtocol : IBowireProtocol, IBowireStreamingWithWireBytes
 {
     /// <summary>Protocol identifier used in Bowire URLs (<c>tacticalapi@host:port</c>).</summary>
     internal const string ProtocolId = "tacticalapi";
@@ -238,6 +238,20 @@ public sealed class BowireTacticalApiProtocol : IBowireProtocol
             // malformed request gets.
             return ErrorResult(ex.Message, BadTransportConfigStatus);
         }
+
+        // Whatever the call returns, the caller sees this next to it. The
+        // core gates its own certificate relaxation to loopback; this plugin
+        // accepts the flag against any host, because a TacticalAPI staging
+        // server is never localhost — so the relaxation is stated on every
+        // result it applied to, rather than being silent.
+        var responseMetadata = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (GrpcTransport.AcceptsAnyServerCertificate(metadata)
+            && address.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+        {
+            responseMetadata[WarningKey] =
+                $"Server certificate validation is off for {new Uri(address).Host} (allowSelfSignedCerts / tls-skip-validation): any certificate is accepted.";
+        }
+
         using var channel = GrpcChannel.ForAddress(address, channelOptions);
         var invoker = channel.CreateCallInvoker();
         var sw = Stopwatch.StartNew();
@@ -256,12 +270,14 @@ public sealed class BowireTacticalApiProtocol : IBowireProtocol
             // operator needs to read — and the refusal's own wording goes into
             // metadata, where it is visible without being hunted for.
             var (refused, refusalMessage) = ReadRefusal(responseMessage);
-            var responseMetadata = new Dictionary<string, string>(StringComparer.Ordinal);
             if (refused)
             {
                 responseMetadata[RefusalMessageKey] =
                     refusalMessage ?? "The server set success = false without an error_message.";
             }
+            responseMetadata[ResponseBytesKey] = responseBytes.Length.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            if (CountObjects(responseMessage) is { } objectCount)
+                responseMetadata[ObjectCountKey] = objectCount.ToString(System.Globalization.CultureInfo.InvariantCulture);
 
             return new InvokeResult(
                 Response: responseJson,
@@ -275,15 +291,13 @@ public sealed class BowireTacticalApiProtocol : IBowireProtocol
             sw.Stop();
             // Mirror the core gRPC plugin's trailer-namespacing so the
             // mock-server replay path can tell trailers from headers.
-            var trailerMetadata = ex.Trailers.ToDictionary(
-                e => "_trailer:" + e.Key,
-                e => e.Value,
-                StringComparer.Ordinal);
+            foreach (var entry in ex.Trailers)
+                responseMetadata["_trailer:" + entry.Key] = entry.Value;
             return new InvokeResult(
                 Response: ex.Status.Detail,
                 DurationMs: sw.ElapsedMilliseconds,
                 Status: ex.StatusCode.ToString(),
-                Metadata: trailerMetadata);
+                Metadata: responseMetadata);
         }
     }
 
@@ -319,6 +333,24 @@ public sealed class BowireTacticalApiProtocol : IBowireProtocol
 
     /// <summary>Status when the metadata bag's transport configuration (mTLS material) could not be built.</summary>
     internal const string BadTransportConfigStatus = "bad-transport-config";
+
+    /// <summary>
+    /// Metadata key carrying how many objects a unary response holds — the
+    /// sum of its repeated fields (<c>situation_objects</c>, <c>blue_forces</c>).
+    /// A live TacNet answers <c>GetSituationObjects</c> with thousands, as
+    /// one JSON document; the count lets the workbench decide how to render
+    /// before it tries.
+    /// </summary>
+    public const string ObjectCountKey = "_tacticalapi:objectCount";
+
+    /// <summary>Metadata key carrying the size of the unary response on the wire, in bytes.</summary>
+    public const string ResponseBytesKey = "_tacticalapi:responseBytes";
+
+    /// <summary>
+    /// Metadata key carrying a warning the caller should see next to the
+    /// result. Today: server-certificate validation was off for this call.
+    /// </summary>
+    public const string WarningKey = "_tacticalapi:warning";
 
     /// <summary>
     /// Read the <c>ResponseHeader</c> every TacticalAPI response embeds, and
@@ -357,6 +389,24 @@ public sealed class BowireTacticalApiProtocol : IBowireProtocol
         // surfaces as the unwrapped string (null when the server left it out).
         var message = header.Descriptor.FindFieldByName("error_message")?.Accessor.GetValue(header) as string;
         return (true, string.IsNullOrWhiteSpace(message) ? null : message);
+    }
+
+    /// <summary>
+    /// How many objects a response carries: the summed lengths of its
+    /// repeated fields. <c>null</c> when the message has no repeated field
+    /// at all (an <c>UpdatePositionResponse</c> is a header and nothing
+    /// else), so the key is absent rather than a misleading zero.
+    /// </summary>
+    internal static int? CountObjects(IMessage response)
+    {
+        int? count = null;
+        foreach (var field in response.Descriptor.Fields.InDeclarationOrder())
+        {
+            if (!field.IsRepeated) continue;
+            if (field.Accessor.GetValue(response) is System.Collections.ICollection items)
+                count = (count ?? 0) + items.Count;
+        }
+        return count;
     }
 
     private static InvokeResult ErrorResult(string message, string status) =>
@@ -423,11 +473,44 @@ public sealed class BowireTacticalApiProtocol : IBowireProtocol
 
     /// <inheritdoc />
     /// <remarks>
+    /// The JSON-only view of <see cref="InvokeStreamWithFramesAsync"/>: one
+    /// pump, two shapes. The core takes this path for a plugin that does not
+    /// expose wire bytes; for one that does, it takes the other and records
+    /// the bytes per frame.
+    /// </remarks>
+    public async IAsyncEnumerable<string> InvokeStreamAsync(
+        string serverUrl, string service, string method,
+        List<string> jsonMessages, bool showInternalServices,
+        Dictionary<string, string>? metadata = null,
+        [EnumeratorCancellation] CancellationToken ct = default)
+    {
+        await foreach (var frame in InvokeStreamWithFramesAsync(
+            serverUrl, service, method, jsonMessages, showInternalServices, metadata, ct).ConfigureAwait(false))
+        {
+            yield return frame.Json;
+        }
+    }
+
+    /// <inheritdoc />
+    /// <remarks>
     /// Server-streaming twin of <see cref="InvokeAsync"/>: same descriptor-
     /// resolution / Method&lt;byte[],byte[]&gt; / JsonParser-and-Formatter
     /// pipeline, but the byte stream rides through
     /// <see cref="CallInvoker.AsyncServerStreamingCall{TRequest,TResponse}(Method{TRequest,TResponse}, string, CallOptions, TRequest)"/>
-    /// and each emitted frame is yielded as a JSON string.
+    /// and each emitted frame is yielded as a <see cref="StreamFrame"/>: the
+    /// JSON rendering for display and the wire bytes for the recorder. The
+    /// mock server replays a recorded subscription from those bytes 1:1 —
+    /// it cannot rebuild them from JSON, because Google.Protobuf's C#
+    /// library has no <c>DynamicMessage</c>. The unary path has recorded its
+    /// bytes from the start; without this, a recorded subscription could be
+    /// looked at but not served.
+    /// <para>
+    /// Frames this plugin makes itself — a resolution error, an unloadable
+    /// transport, the idle timeout — carry no bytes. The refusal frame does:
+    /// its JSON is an envelope around the server's frame, its bytes are that
+    /// frame as the server sent it, so a replay refuses the way the server
+    /// did.
+    /// </para>
     /// <para>
     /// Client- and duplex-streaming still return the "wrong-method-shape"
     /// hint via <see cref="InvokeAsync"/> — every TacticalAPI streaming RPC
@@ -438,7 +521,7 @@ public sealed class BowireTacticalApiProtocol : IBowireProtocol
     /// streaming entry point can stay narrow.
     /// </para>
     /// </remarks>
-    public async IAsyncEnumerable<string> InvokeStreamAsync(
+    public async IAsyncEnumerable<StreamFrame> InvokeStreamWithFramesAsync(
         string serverUrl, string service, string method,
         List<string> jsonMessages, bool showInternalServices,
         Dictionary<string, string>? metadata = null,
@@ -448,12 +531,12 @@ public sealed class BowireTacticalApiProtocol : IBowireProtocol
 
         if (!TacticalApiDescriptors.TryResolve(service, method, out var serviceDesc, out var methodDesc, out var resolveError))
         {
-            yield return $$"""{ "error": {{System.Text.Json.JsonSerializer.Serialize(resolveError)}} }""";
+            yield return Own($$"""{ "error": {{System.Text.Json.JsonSerializer.Serialize(resolveError)}} }""");
             yield break;
         }
         if (!methodDesc!.IsServerStreaming || methodDesc.IsClientStreaming)
         {
-            yield return """{ "error": "Use the unary endpoint — client / duplex streaming aren't part of the TacticalAPI surface." }""";
+            yield return Own("""{ "error": "Use the unary endpoint — client / duplex streaming aren't part of the TacticalAPI surface." }""");
             yield break;
         }
 
@@ -473,7 +556,7 @@ public sealed class BowireTacticalApiProtocol : IBowireProtocol
         }
         if (parseError is not null)
         {
-            yield return $$"""{ "error": {{System.Text.Json.JsonSerializer.Serialize(parseError)}} }""";
+            yield return Own($$"""{ "error": {{System.Text.Json.JsonSerializer.Serialize(parseError)}} }""");
             yield break;
         }
 
@@ -504,7 +587,7 @@ public sealed class BowireTacticalApiProtocol : IBowireProtocol
         }
         if (transportError is not null)
         {
-            yield return $$"""{ "error": {{System.Text.Json.JsonSerializer.Serialize(transportError)}}, "status": "{{BadTransportConfigStatus}}" }""";
+            yield return Own($$"""{ "error": {{System.Text.Json.JsonSerializer.Serialize(transportError)}}, "status": "{{BadTransportConfigStatus}}" }""");
             yield break;
         }
         using var channel = GrpcChannel.ForAddress(address, channelOptions!);
@@ -533,9 +616,9 @@ public sealed class BowireTacticalApiProtocol : IBowireProtocol
                 // frame that says why, not with a silent end-of-stream the
                 // operator would read as the server having closed.
                 var detail = $"No frame for {idleSeconds} s — closing the subscription (streamIdleSeconds).";
-                yield return $$"""
+                yield return Own($$"""
                     { "error": {{System.Text.Json.JsonSerializer.Serialize(detail)}}, "status": "{{StreamIdleStatus}}" }
-                    """;
+                    """);
                 yield break;
             }
             if (!more)
@@ -554,15 +637,20 @@ public sealed class BowireTacticalApiProtocol : IBowireProtocol
             if (refused)
             {
                 var detail = refusalMessage ?? "The server set success = false without an error_message.";
-                yield return $$"""
+                yield return new StreamFrame(
+                    $$"""
                     { "error": {{System.Text.Json.JsonSerializer.Serialize(detail)}}, "status": "{{RefusedStatus}}", "frame": {{frameJson}} }
-                    """;
+                    """,
+                    responseBytes);
                 yield break;
             }
 
-            yield return frameJson;
+            yield return new StreamFrame(frameJson, responseBytes);
         }
     }
+
+    /// <summary>A frame this plugin made itself — nothing the server sent, so no bytes to replay.</summary>
+    private static StreamFrame Own(string json) => new(json, Binary: null);
 
     /// <inheritdoc />
     public Task<IBowireChannel?> OpenChannelAsync(

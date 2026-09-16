@@ -1,6 +1,8 @@
 // Copyright 2026 Küstenlogik
 // SPDX-License-Identifier: Apache-2.0
 
+using Rheinmetall.TacticalApi.V0;
+
 namespace Kuestenlogik.Bowire.Protocol.TacticalApi.Tests;
 
 /// <summary>
@@ -289,4 +291,69 @@ public sealed class BowireTacticalApiProtocolInvokeTests
         [Kuestenlogik.Bowire.Auth.MtlsConfig.MtlsMarkerKey] =
             """{ "certificate": "-----BEGIN CERTIFICATE-----\nkaputt\n-----END CERTIFICATE-----", "privateKey": "-----BEGIN PRIVATE KEY-----\nkaputt\n-----END PRIVATE KEY-----" }""",
     };
+
+    [Fact]
+    public void CountObjects_sums_the_repeated_fields_and_is_null_without_any()
+    {
+        var three = new GetSituationObjectsResponse();
+        three.SituationObjects.Add(new SituationObject());
+        three.SituationObjects.Add(new SituationObject());
+        three.SituationObjects.Add(new SituationObject());
+        Assert.Equal(3, BowireTacticalApiProtocol.CountObjects(three));
+
+        // A repeated field with nothing in it is a count of zero, not an
+        // absent key: "the server has no objects" is an answer.
+        Assert.Equal(0, BowireTacticalApiProtocol.CountObjects(new GetBlueForcesResponse()));
+
+        // No repeated field at all — header and nothing else.
+        Assert.Null(BowireTacticalApiProtocol.CountObjects(new UpdatePositionResponse()));
+    }
+
+    [Fact]
+    public async Task Invoke_says_so_on_the_result_when_certificate_validation_is_off()
+    {
+        // Nothing listens on 127.0.0.1:1, so the call fails — and the
+        // warning is on that result too: it is about what the call was
+        // willing to accept, not about what it got.
+        var plugin = new BowireTacticalApiProtocol();
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        cts.CancelAfter(TimeSpan.FromSeconds(10));
+
+        var result = await plugin.InvokeAsync(
+            "tacticalapi@127.0.0.1:1", "Situation", "GetSituationObjects",
+            jsonMessages: ["{}"], showInternalServices: false,
+            metadata: new Dictionary<string, string>
+            {
+                [GrpcTransport.AllowSelfSignedCertsKey] = "true",
+                [GrpcTransport.InvocationDeadlineSecondsKey] = "3",
+            },
+            ct: cts.Token);
+
+        Assert.NotEqual("OK", result.Status);
+        var warning = result.Metadata[BowireTacticalApiProtocol.WarningKey];
+        Assert.Contains("127.0.0.1", warning, StringComparison.Ordinal);
+        Assert.Contains("any certificate is accepted", warning, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Invoke_stays_quiet_about_certificates_on_a_plaintext_url()
+    {
+        // grpc:// is cleartext — there is no certificate to validate, so a
+        // warning about not validating one would be noise.
+        var plugin = new BowireTacticalApiProtocol();
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        cts.CancelAfter(TimeSpan.FromSeconds(10));
+
+        var result = await plugin.InvokeAsync(
+            "grpc://127.0.0.1:1", "Situation", "GetSituationObjects",
+            jsonMessages: ["{}"], showInternalServices: false,
+            metadata: new Dictionary<string, string>
+            {
+                [GrpcTransport.AllowSelfSignedCertsKey] = "true",
+                [GrpcTransport.InvocationDeadlineSecondsKey] = "3",
+            },
+            ct: cts.Token);
+
+        Assert.DoesNotContain(BowireTacticalApiProtocol.WarningKey, result.Metadata.Keys);
+    }
 }
