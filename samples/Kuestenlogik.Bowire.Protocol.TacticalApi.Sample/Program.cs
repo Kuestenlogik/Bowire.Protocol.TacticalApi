@@ -3,9 +3,9 @@
 
 // Combined TacticalAPI sample for Bowire. One project, both stories:
 //
-//   * Embedded — the RadarSweep demo server (thirteen MIL-2525C tracks,
-//     four blue forces and this host's own pose around the western
-//     Baltic) runs in-process, and the workbench is mounted at /bowire
+//   * Embedded — the RadarSweep demo server (thirteen MIL-2525C tracks
+//     under seven 2525D control measures, four blue forces and this
+//     host's own pose around the western Baltic) runs in-process, and the workbench is mounted at /bowire
 //     with the server already seeded into the Sources rail via
 //     tacticalapi-catalogue.json.
 //   * Separate — it is a real TacticalAPI gRPC server, so point an
