@@ -74,6 +74,12 @@ internal static class SeededOverlay
     }
 
     /// <summary>Add the overlay to <paramref name="objects"/>, keyed the way the service keys everything.</summary>
+    /// <remarks>
+    /// The names are bare designations — <c>HANSE</c>, not <c>PL HANSE</c>.
+    /// The standard's renderer prints the graphic's own prefix in front
+    /// of the designation it is given ("PL", "AA", "AC", "DA"), so a name
+    /// that already carries it would come out twice on the map.
+    /// </remarks>
     public static void AddTo(Dictionary<string, SituationObject> objects, Identity reporter, Timestamp now)
     {
         void Add(string uuid, string sidc, string name, SymbolLocation location)
@@ -85,7 +91,7 @@ internal static class SeededOverlay
         // --- Boundary: north–south between the convoys' ground and the
         // engagement, a battalion on either side. Line, four vertices.
         Add("0be10100-6666-4f66-9f66-ffffffff0001", Sidc.BoundaryBattalion,
-            "Boundary Alpha/Bravo",
+            "ALPHA",
             new SymbolLocation
             {
                 Line = new Line
@@ -98,7 +104,7 @@ internal static class SeededOverlay
         // --- Phase line: east–west across the engagement's line of
         // advance, the objective Blau is closing on. Line, four vertices.
         Add("0be10100-6666-4f66-9f66-ffffffff0002", Sidc.PhaseLine,
-            "PL HANSE",
+            "HANSE",
             new SymbolLocation
             {
                 Line = new Line
@@ -111,7 +117,7 @@ internal static class SeededOverlay
         // --- Assembly area: the ground Convoy Alpha leaves from. Polygon,
         // five vertices around the convoy's origin at 54.09°N 10.20°E.
         Add("0be10100-6666-4f66-9f66-ffffffff0003", Sidc.AssemblyArea,
-            "AA BUCHE",
+            "BUCHE",
             new SymbolLocation
             {
                 Polygon = new Polygon
@@ -122,24 +128,28 @@ internal static class SeededOverlay
             });
 
         // --- Axis of advance: Blau's main attack, south-east onto Rot.
-        // Multipoint, because the standard fixes what each point means:
-        // the first three are the centreline, the last one sets the width
-        // of the arrow — it is not a vertex of the shape.
+        // Multipoint, because the standard fixes what each point means
+        // (draw rule AXIS2): point 1 is the tip of the arrowhead, points
+        // 1 to N-1 the centreline back to the rear, point N the back of
+        // the arrowhead — it sets the width and is not a vertex of the
+        // shape. So the list runs from the enemy backwards.
         Add("0be10100-6666-4f66-9f66-ffffffff0004", Sidc.AxisOfAdvanceMainAttack,
-            "AXIS BLAU",
+            "BLAU",
             new SymbolLocation
             {
                 Multipoint = new Multipoint
                 {
                     LocationTime = now,
-                    Points = { P(54.32, 10.72), P(54.28, 10.78), P(54.245, 10.835), P(54.235, 10.815) },
+                    // The width point sits ~2.8 km off the centreline, so
+                    // the arrow reads as one at the sample's scale.
+                    Points = { P(54.245, 10.835), P(54.28, 10.78), P(54.32, 10.72), P(54.277, 10.842) },
                 },
             });
 
         // --- Air corridor: the UAV's way from the coast out to its orbit
         // over the bay. Corridor, a centreline and a width in metres.
         Add("0be10100-6666-4f66-9f66-ffffffff0005", Sidc.AirCorridor,
-            "AC KITE",
+            "KITE",
             new SymbolLocation
             {
                 Corridor = new Corridor
@@ -154,7 +164,7 @@ internal static class SeededOverlay
         // watches, out over the water. Fan: a vertex, two ranges, an
         // orientation (clockwise from north to the left edge) and a width.
         Add("0be10100-6666-4f66-9f66-ffffffff0006", Sidc.SensorRangeFanSector,
-            "Radar Wismar",
+            "WISMAR",
             new SymbolLocation
             {
                 Fan = new Fan
@@ -172,7 +182,7 @@ internal static class SeededOverlay
         // overlay has one graphic in red. Ellipse: a centre and one point
         // on each axis.
         Add("0be10100-6666-4f66-9f66-ffffffff0007", Sidc.DefendedAreaEllipseHostile,
-            "Defended Area (hostile)",
+            "NORD",
             new SymbolLocation
             {
                 Ellipse = new Ellipse

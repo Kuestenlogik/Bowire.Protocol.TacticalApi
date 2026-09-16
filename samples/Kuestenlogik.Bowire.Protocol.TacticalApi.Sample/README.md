@@ -64,15 +64,18 @@ time can see which one it has not reached yet:
 
 | Graphic | 2525D code | `SymbolLocation` case | Where |
 |---|---|---|---|
-| Boundary, battalion | `10032500161101000000` | `line`, 4 points | North–south between the convoys' ground and the engagement |
-| Phase Line *PL HANSE* | `10032500001403000000` | `line`, 4 points | East–west across the engagement's line of advance |
-| Assembly Area *AA BUCHE* | `10032500001502000000` | `polygon`, 5 points | Around Convoy Alpha's origin |
-| Axis of Advance, main attack *AXIS BLAU* | `10032500001514030000` | `multipoint`, 3 path points + 1 width point | Blau's attack, south-east onto Rot |
-| Air Corridor *AC KITE* | `10032500001701000000` | `corridor`, 3 points, 2 000 m wide | From the coast out to the UAV's orbit |
-| Sensor Range Fan *Radar Wismar* | `10032500002422000000` | `fan`, 1–12 km, 300°–030° | The sector the sweep-centre radar watches, over the water |
-| Defended Area, hostile | `10062500002002010000` | `ellipse`, centre + one point per axis | Offshore to the north-east — the overlay's one red graphic |
+| Boundary *ALPHA*, battalion | `10032500161101000000` | `line`, 4 points | North–south between the convoys' ground and the engagement |
+| Phase Line *HANSE* | `10032500001403000000` | `line`, 4 points | East–west across the engagement's line of advance |
+| Assembly Area *BUCHE* | `10032500001502000000` | `polygon`, 5 points | Around Convoy Alpha's origin |
+| Axis of Advance, main attack *BLAU* | `10032500001514030000` | `multipoint`, tip first, 3 centreline points + 1 width point | Blau's attack, south-east onto Rot |
+| Air Corridor *KITE* | `10032500001701000000` | `corridor`, 3 points, 2 000 m wide | From the coast out to the UAV's orbit |
+| Sensor Range Fan *WISMAR* | `10032500002422000000` | `fan`, 1–12 km, 300°–030° | The sector the sweep-centre radar watches, over the water |
+| Defended Area *NORD*, hostile | `10062500002002010000` | `ellipse`, centre + one point per axis | Offshore to the north-east — the overlay's one red graphic |
 
-Two things are deliberate. The codes are **2525D in the twenty-digit
+Three things are deliberate. The names are bare designations — `HANSE`,
+not `PL HANSE` — because the standard's renderer prints the graphic's
+own prefix in front of whatever designation it is given, and a name that
+already carries it comes out twice. The codes are **2525D in the twenty-digit
 numeric form** — `symbolIdentifier.content.numericIdentifier` with
 `firstTenDigits` / `secondTenDigits`, `symbolCatalog` =
 `SYMBOL_CATALOG_MIL2525_D` — where the tracks use fifteen-letter 2525C
