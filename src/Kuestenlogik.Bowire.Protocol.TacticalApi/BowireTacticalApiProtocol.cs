@@ -8,6 +8,7 @@ using Google.Protobuf.Reflection;
 using Grpc.Core;
 using Grpc.Net.Client;
 using Kuestenlogik.Bowire.Models;
+using Kuestenlogik.Bowire.Plugins;
 using Rheinmetall.TacticalApi.V0;
 
 namespace Kuestenlogik.Bowire.Protocol.TacticalApi;
@@ -76,6 +77,68 @@ public sealed class BowireTacticalApiProtocol : IBowireProtocol, IBowireStreamin
             + "Off by default.",
             "bool", DefaultUseGrpcWeb),
     ];
+
+    /// <summary>
+    /// Workspace settings, resolved in <see cref="Initialize"/>; null when
+    /// the host registered none, which is the CLI's case and every host
+    /// before Kuestenlogik/Bowire#640.
+    /// </summary>
+    private IBowirePluginSettings? _settings;
+
+    /// <inheritdoc />
+    public void Initialize(IServiceProvider? serviceProvider)
+        => _settings = serviceProvider?.GetService(typeof(IBowirePluginSettings)) as IBowirePluginSettings;
+
+    /// <summary>
+    /// The four keys that this plugin declares as settings and also reads
+    /// off the metadata bag. <see cref="WithSettingDefaults"/> fills each
+    /// from the workspace when the caller did not send it.
+    /// </summary>
+    private static readonly string[] SettingBackedMetadataKeys =
+    [
+        GrpcTransport.InvocationDeadlineSecondsKey,
+        GrpcTransport.StreamIdleSecondsKey,
+        GrpcTransport.AllowSelfSignedCertsKey,
+        GrpcTransport.UseGrpcWebKey,
+    ];
+
+    /// <summary>
+    /// The caller's metadata bag with the workspace's settings filled in
+    /// for keys it did not carry. Per-call metadata wins: it is the
+    /// narrower statement.
+    /// </summary>
+    /// <remarks>
+    /// Every transport knob in this plugin is read off the metadata bag —
+    /// <see cref="GrpcTransport.WantsGrpcWeb"/> and its neighbours take a
+    /// dictionary, not a settings store. That was the whole gap: the four
+    /// settings above appeared in Settings → TacticalAPI and were written
+    /// to the workspace, but the core never merges plugin settings into
+    /// metadata, so nothing downstream ever saw them. <c>docs/protocol.md</c>
+    /// documented <c>useGrpcWeb</c> as the way to switch the wire; someone
+    /// who ticked it and watched it persist had every reason to believe it.
+    /// Merging here rather than at each read keeps the knobs in one place
+    /// and leaves the metadata-driven design intact.
+    /// </remarks>
+    internal Dictionary<string, string>? WithSettingDefaults(Dictionary<string, string>? metadata)
+    {
+        if (_settings is null) return metadata;
+
+        Dictionary<string, string>? merged = null;
+        foreach (var key in SettingBackedMetadataKeys)
+        {
+            if (metadata is not null && metadata.ContainsKey(key)) continue;
+
+            var configured = _settings.GetValue(ProtocolId, key);
+            if (string.IsNullOrWhiteSpace(configured)) continue;
+
+            merged ??= metadata is null
+                ? new Dictionary<string, string>(StringComparer.Ordinal)
+                : new Dictionary<string, string>(metadata, StringComparer.Ordinal);
+            merged[key] = configured.Trim();
+        }
+
+        return merged ?? metadata;
+    }
 
     /// <inheritdoc />
     public string IconSvg =>
@@ -190,6 +253,7 @@ public sealed class BowireTacticalApiProtocol : IBowireProtocol, IBowireStreamin
         Dictionary<string, string>? metadata = null, CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(serverUrl);
+        metadata = WithSettingDefaults(metadata);
 
         if (!TacticalApiDescriptors.TryResolve(service, method, out var serviceDesc, out var methodDesc, out var resolveError))
             return ErrorResult(resolveError!, "not-found");
@@ -528,6 +592,7 @@ public sealed class BowireTacticalApiProtocol : IBowireProtocol, IBowireStreamin
         [EnumeratorCancellation] CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(serverUrl);
+        metadata = WithSettingDefaults(metadata);
 
         if (!TacticalApiDescriptors.TryResolve(service, method, out var serviceDesc, out var methodDesc, out var resolveError))
         {

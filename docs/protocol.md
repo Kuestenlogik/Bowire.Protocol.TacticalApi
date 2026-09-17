@@ -142,6 +142,11 @@ This plugin speaks both (#67). Native gRPC is the default; switch the wire with 
 - the plugin setting **`useGrpcWeb`** (Settings → TacticalAPI), or
 - the shared `__bowireGrpcTransport=web` marker in the call metadata — the same marker the core appends for the core gRPC plugin's `grpcweb@` hint, so a caller that already knows that vocabulary needs no second one.
 
+Where both speak, the call metadata wins: it is the narrower statement. The same
+precedence holds for the plugin's other three settings — `allowSelfSignedCerts`,
+`invocationDeadlineSeconds` and `streamIdleSeconds` — each of which is a
+workspace default for the metadata key of the same name.
+
 Discovery works over either transport regardless, because the proto schema is bundled rather than fetched at connect time. Server-streaming works over gRPC-Web too; what gRPC-Web cannot carry is client-streaming and duplex, and the TacticalAPI surface has neither.
 
 ## Licensing &mdash; please read
