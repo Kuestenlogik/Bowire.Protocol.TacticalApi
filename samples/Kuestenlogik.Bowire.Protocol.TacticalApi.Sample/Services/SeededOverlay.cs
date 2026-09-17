@@ -10,7 +10,7 @@ namespace Kuestenlogik.Bowire.Protocol.TacticalApi.Sample.Services;
 /// <summary>
 /// Seeds the overlay: seven MIL-STD-2525D control measures — lines, areas,
 /// an arrow, a corridor, a sector, an ellipse — laid over the tracks of
-/// <see cref="SeededSituation"/>.
+/// <see cref="SeededSituation"/>, and an eighth in the 2525C string form.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -38,7 +38,11 @@ namespace Kuestenlogik.Bowire.Protocol.TacticalApi.Sample.Services;
 /// in view (mil-sym-ts) speaks 2525D and later, not C, and a
 /// twenty-digit code split into two ten-digit halves is what a real
 /// TacticalAPI producer sends — so the sample exercises the numeric path
-/// too, which the tracks never did.
+/// too, which the tracks never did. One graphic — a second phase line —
+/// is the exception and carries a 2525C string like the tracks do: a
+/// producer that still speaks C sends its graphics that way, and the
+/// consumer has to translate the code before a D-only renderer can draw
+/// it. That translation needs data to be checked against.
 /// </para>
 /// <para>
 /// Nothing here moves. Control measures are planned, not observed; a
@@ -71,6 +75,12 @@ internal static class SeededOverlay
         public const string SensorRangeFanSector = "10032500002422000000";
         /// <summary>Defended Area, Ellipse/Circle (200201), hostile.</summary>
         public const string DefendedAreaEllipseHostile = "10062500002002010000";
+        /// <summary>
+        /// Phase Line in the 2525C string form: scheme G (tactical graphic),
+        /// friend, category G, present, function id <c>GLP---</c>. The
+        /// 2525D equivalent is <see cref="PhaseLine"/>.
+        /// </summary>
+        public const string PhaseLine2525C = "GFGPGLP-------X";
     }
 
     /// <summary>Add the overlay to <paramref name="objects"/>, keyed the way the service keys everything.</summary>
@@ -82,9 +92,10 @@ internal static class SeededOverlay
     /// </remarks>
     public static void AddTo(Dictionary<string, SituationObject> objects, Identity reporter, Timestamp now)
     {
-        void Add(string uuid, string sidc, string name, SymbolLocation location)
+        void Add(string uuid, string sidc, string name, SymbolLocation location,
+                 SymbolCatalog catalog = SymbolCatalog.Mil2525D)
         {
-            var graphic = BuildGraphic(uuid, sidc, name, location, reporter, now);
+            var graphic = BuildGraphic(uuid, sidc, name, location, reporter, now, catalog);
             objects[IdentityKeys.Of(graphic.Symbol.Identity)] = graphic;
         }
 
@@ -113,6 +124,20 @@ internal static class SeededOverlay
                     Points = { P(54.29, 10.62), P(54.27, 10.72), P(54.26, 10.82), P(54.25, 10.92) },
                 },
             });
+
+        // --- A second phase line, south of the engagement, in the 2525C
+        // string form the tracks use. Same location case as HANSE; the
+        // point is the code.
+        Add("0be10100-6666-4f66-9f66-ffffffff0008", Sidc.PhaseLine2525C,
+            "OSTSEE",
+            new SymbolLocation
+            {
+                Line = new Line
+                {
+                    LocationTime = now,
+                    Points = { P(54.20, 10.60), P(54.18, 10.75), P(54.17, 10.90) },
+                },
+            }, SymbolCatalog.Mil2525C);
 
         // --- Assembly area: the ground Convoy Alpha leaves from. Polygon,
         // five vertices around the convoy's origin at 54.09°N 10.20°E.
@@ -217,7 +242,7 @@ internal static class SeededOverlay
 
     private static SituationObject BuildGraphic(
         string uuid, string sidc, string name, SymbolLocation location,
-        Identity reporter, Timestamp now)
+        Identity reporter, Timestamp now, SymbolCatalog catalog)
     {
         var creationMeta = new CreationMetaData
         {
@@ -233,11 +258,9 @@ internal static class SeededOverlay
             SymbolIdentifier = new DataPropertySymbolIdentifier
             {
                 CreationMetaData = creationMeta,
-                Content = new SymbolIdentifier
-                {
-                    SymbolCatalog = SymbolCatalog.Mil2525D,
-                    NumericIdentifier = Numeric(sidc),
-                },
+                Content = catalog == SymbolCatalog.Mil2525C
+                    ? new SymbolIdentifier { SymbolCatalog = catalog, StringIdentifier = sidc }
+                    : new SymbolIdentifier { SymbolCatalog = catalog, NumericIdentifier = Numeric(sidc) },
             },
             Location = new DataPropertyLocation
             {

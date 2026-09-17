@@ -31,13 +31,13 @@ public sealed class SeededOverlayTests : IClassFixture<InProcessSampleServerFixt
     {
         var (objects, motions) = SeededSituation.Build();
         var overlay = objects.Values
-            .Where(o => o.Symbol?.SymbolIdentifier?.Content?.SymbolCatalog == SymbolCatalog.Mil2525D)
+            .Where(o => o.Symbol?.Location?.Content?.LocationCase != SymbolLocation.LocationOneofCase.Point)
             .ToList();
 
-        Assert.Equal(7, overlay.Count);
+        Assert.Equal(8, overlay.Count);
 
-        // Line twice (boundary, phase line), the rest once — and neither
-        // of the two cases the README says are left out.
+        // Line three times (boundary, two phase lines), the rest once —
+        // and neither of the two cases the README says are left out.
         var cases = overlay
             .Select(o => o.Symbol.Location.Content.LocationCase)
             .OrderBy(c => c)
@@ -50,10 +50,19 @@ public sealed class SeededOverlayTests : IClassFixture<InProcessSampleServerFixt
                 SymbolLocation.LocationOneofCase.Corridor,
                 SymbolLocation.LocationOneofCase.Line,
                 SymbolLocation.LocationOneofCase.Line,
+                SymbolLocation.LocationOneofCase.Line,
                 SymbolLocation.LocationOneofCase.Polygon,
                 SymbolLocation.LocationOneofCase.Fan,
             }.OrderBy(c => c),
             cases);
+
+        // Seven in the numeric 2525D form, one — the second phase line —
+        // as the 2525C string a C-speaking producer sends.
+        var stringCoded = overlay.Where(o => o.Symbol.SymbolIdentifier.Content.IdentifierCase == SymbolIdentifier.IdentifierOneofCase.StringIdentifier).ToList();
+        var single = Assert.Single(stringCoded);
+        Assert.Equal(SymbolCatalog.Mil2525C, single.Symbol.SymbolIdentifier.Content.SymbolCatalog);
+        Assert.Equal(SeededOverlay.Sidc.PhaseLine2525C, single.Symbol.SymbolIdentifier.Content.StringIdentifier);
+        Assert.Equal("OSTSEE", single.Symbol.Name.Content);
 
         foreach (var graphic in overlay)
         {
@@ -104,7 +113,7 @@ public sealed class SeededOverlayTests : IClassFixture<InProcessSampleServerFixt
         var overlayBefore = OverlayLocations(before.Response!);
         var overlayAfter = OverlayLocations(after.Response!);
 
-        Assert.Equal(7, overlayBefore.Count);
+        Assert.Equal(8, overlayBefore.Count);
         Assert.Equal(overlayBefore, overlayAfter);
 
         // The numeric identifier crosses the wire as two int64 halves, the
@@ -127,7 +136,7 @@ public sealed class SeededOverlayTests : IClassFixture<InProcessSampleServerFixt
     /// <summary>
     /// The overlay's <c>location</c> objects out of a GetSituationObjects
     /// response, keyed by uuid — the graphics are the objects whose
-    /// symbol identifier is numeric.
+    /// location is not a point.
     /// </summary>
     private static Dictionary<string, string> OverlayLocations(string response)
     {
@@ -136,14 +145,10 @@ public sealed class SeededOverlayTests : IClassFixture<InProcessSampleServerFixt
         foreach (var obj in doc.RootElement.GetProperty("situationObjects").EnumerateArray())
         {
             if (!obj.TryGetProperty("symbol", out var symbol)) continue;
-            if (!symbol.TryGetProperty("symbolIdentifier", out var sid)
-                || !sid.TryGetProperty("content", out var content)
-                || !content.TryGetProperty("numericIdentifier", out _))
-            {
-                continue;
-            }
+            var location = symbol.GetProperty("location").GetProperty("content");
+            if (location.TryGetProperty("point", out _)) continue;
             var uuid = symbol.GetProperty("identity").GetProperty("uuidIdentity").GetString()!;
-            result[uuid] = symbol.GetProperty("location").GetProperty("content").GetRawText();
+            result[uuid] = location.GetRawText();
         }
         return result;
     }

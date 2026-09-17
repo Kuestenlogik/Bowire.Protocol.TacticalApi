@@ -9,7 +9,7 @@ namespace Kuestenlogik.Bowire.Protocol.TacticalApi.Sample.Services;
 /// <summary>
 /// Seeds the demo scenario: thirteen MIL-2525C tracks in five groups,
 /// spread across the western Baltic and the Schleswig-Holstein coast, and
-/// the overlay of seven 2525D control measures laid over them
+/// the overlay of eight control measures laid over them
 /// (<see cref="SeededOverlay"/>).
 /// </summary>
 /// <remarks>
