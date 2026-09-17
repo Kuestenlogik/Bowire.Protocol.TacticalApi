@@ -83,6 +83,14 @@ internal static class SeededOverlay
         public const string PhaseLine2525C = "GFGPGLP-------X";
     }
 
+    /// <summary>
+    /// The radar the range fan belongs to: on the north shore of Poel,
+    /// looking out over the bight the sweep turns in. A sensor stands on
+    /// land; the earlier vertex at the sweep centre put it in the water.
+    /// </summary>
+    public const double RadarLatitude = 54.02;
+    public const double RadarLongitude = 11.46;
+
     /// <summary>Add the overlay to <paramref name="objects"/>, keyed the way the service keys everything.</summary>
     /// <remarks>
     /// The names are bare designations — <c>HANSE</c>, not <c>PL HANSE</c>.
@@ -108,7 +116,7 @@ internal static class SeededOverlay
                 Line = new Line
                 {
                     LocationTime = now,
-                    Points = { P(54.36, 10.55), P(54.28, 10.58), P(54.20, 10.53), P(54.12, 10.56) },
+                    Points = { P(54.33, 10.55), P(54.28, 10.58), P(54.20, 10.53), P(54.12, 10.56) },
                 },
             });
 
@@ -185,25 +193,27 @@ internal static class SeededOverlay
                 },
             });
 
-        // --- Sensor range fan: the sector the radar at the sweep centre
-        // watches, out over the water. Fan: a vertex, two ranges, an
-        // orientation (clockwise from north to the left edge) and a width.
+        // --- Sensor range fan: the sector the radar on Poel watches, out
+        // over the bight the sweep turns in. Fan: a vertex, two ranges,
+        // an orientation (clockwise from north to the left edge) and a
+        // width. 20 km reaches past the far side of the sweep circle.
         Add("0be10100-6666-4f66-9f66-ffffffff0006", Sidc.SensorRangeFanSector,
-            "WISMAR",
+            "POEL",
             new SymbolLocation
             {
                 Fan = new Fan
                 {
                     LocationTime = now,
-                    VertexPoint = P(SeededSituation.CentreLatitude, SeededSituation.CentreLongitude),
+                    VertexPoint = P(RadarLatitude, RadarLongitude),
                     MinimumRangeDimension = 1_000,
-                    MaximumRangeDimension = 12_000,
+                    MaximumRangeDimension = 20_000,
                     OrientationAngle = 300,
                     SectorSizeAngle = 90,
                 },
             });
 
-        // --- Defended area: hostile, offshore to the north-east, so the
+        // --- Defended area: hostile, offshore to the north-east — open
+        // water north of Rerik, clear of the Kühlungsborn shore — so the
         // overlay has one graphic in red. Ellipse: a centre and one point
         // on each axis.
         Add("0be10100-6666-4f66-9f66-ffffffff0007", Sidc.DefendedAreaEllipseHostile,
@@ -213,9 +223,9 @@ internal static class SeededOverlay
                 Ellipse = new Ellipse
                 {
                     LocationTime = now,
-                    CenterPoint = P(54.12, 11.70),
-                    FirstConjugateDiameterPoint = P(54.12, 11.76),
-                    SecondConjugateDiameterPoint = P(54.145, 11.70),
+                    CenterPoint = P(54.20, 11.60),
+                    FirstConjugateDiameterPoint = P(54.20, 11.66),
+                    SecondConjugateDiameterPoint = P(54.225, 11.60),
                 },
             });
     }

@@ -66,20 +66,23 @@ internal static class SeededBlueForces
     [
         // Static: a command post is a position that should not drift.
         // If it does, something is integrating instead of evaluating.
+        // An infantry platoon's headquarters: UCI with the HQ indicator
+        // and the platoon echelon in the symbol modifier.
         new SeededBlueForce(
             Id: "BF-NORDSTERN",
             Callsign: "Nordstern",
-            SymbolCode: "SFGPUH----H****",
+            SymbolCode: "SFGPUCI---HD***",
             Type: new BlueForceType { IsLeader = true },
             Motion: new LegMotion(54.47, 9.86, BearingDegrees: 0, MetresPerSecond: 0.0),
             OrganizationUnitId: DetachmentId),
 
         // This host. Its position comes from OwnPlatform, so an operator
-        // fix sent to OwnPose.UpdatePosition moves it.
+        // fix sent to OwnPose.UpdatePosition moves it. A utility vehicle
+        // (EVU) — the one the UAV below is mounted on.
         new SeededBlueForce(
             Id: OwnPlatform.OwnBlueForceId,
             Callsign: "Gecko 21",
-            SymbolCode: "SFGPUCVC--*****",
+            SymbolCode: "SFGPEVU---*****",
             Type: new BlueForceType { IsVehicle = true },
             Motion: null,
             OrganizationUnitId: DetachmentId,
@@ -101,7 +104,7 @@ internal static class SeededBlueForces
         new SeededBlueForce(
             Id: "BF-MOEWE-3",
             Callsign: "Möwe 3",
-            SymbolCode: "SFGPUCI---*****",
+            SymbolCode: "SFGPUCI----C***",
             Type: new BlueForceType { IsLeader = true },
             Motion: new LegMotion(54.46, 9.92, BearingDegrees: 200, MetresPerSecond: 1.4),
             OrganizationUnitId: DetachmentId),

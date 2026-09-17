@@ -29,16 +29,18 @@ All three upstream services are served:
 
 | Group | Tracks | Motion |
 |---|---|---|
-| **RadarSweep** | 3 (friendly / hostile / neutral) | 120° apart on one 6.6 km circle at 54°N 11.5°E, a rotation a minute |
-| **Convoy Alpha** | 3 friendly | Nose-to-tail east along a road at 11 m/s, 60 m apart |
-| **Convoy Bravo** | 2 friendly | South at 16 m/s, 80 m apart |
-| **UAV Kite** | 1 friendly | Orbiting the Bay of Lübeck, 2.5 km radius, a rotation every 90 s |
-| **Engagement** | 2 friendly + 2 hostile | Two pairs closing head-on, so the trajectories cross |
+| **RadarSweep** | 3 ships (friendly patrol boat, hostile destroyer, neutral cargo) | 120° apart on one 6.6 km circle in the Mecklenburg Bight north of Poel (54.16°N 11.38°E), a rotation a minute |
+| **Convoy Alpha** | 3 friendly APCs | Nose-to-tail east along a road at 11 m/s, 60 m apart |
+| **Convoy Bravo** | 2 friendly trucks | South at 16 m/s, 80 m apart |
+| **UAV Kite** | 1 friendly UAV | Orbiting off Poel, 2.5 km radius, a rotation every 90 s |
+| **Engagement** | 2 friendly + 2 hostile tanks | Two pairs closing head-on on the fields east of Plön, so the trajectories cross |
 | **Overlay** | 8 control measures (7 friendly + 1 hostile) | Static. The lines, areas, arrow, corridor, sector and ellipse the tracks operate under — see below |
 | **Blue forces** | 4 friendly, on `BlueForceTracking` | A static command post, this host's own vehicle, a UAV mounted on it, and a dismounted section at walking pace |
 
 The groups are deliberately unlike each other — different places, speeds,
-shapes and affinities. Three contacts on one circle show that a map is
+shapes and affinities. Every code carries a function id the renderer
+has an icon for, and every track is where such a thing can be: the ships
+on the water, the vehicles on the roads. Three contacts on one circle show that a map is
 updating; they show nothing about whether the workbench keeps entities
 apart. A bug that merges two tracks, colours by message type instead of
 by entity, or drops the tail of a multi-entity frame is visible here and
@@ -70,8 +72,8 @@ time can see which one it has not reached yet:
 | Assembly Area *BUCHE* | `10032500001502000000` | `polygon`, 5 points | Around Convoy Alpha's origin |
 | Axis of Advance, main attack *BLAU* | `10032500001514030000` | `multipoint`, tip first, 3 centreline points + 1 width point | Blau's attack, south-east onto Rot |
 | Air Corridor *KITE* | `10032500001701000000` | `corridor`, 3 points, 2 000 m wide | From the coast out to the UAV's orbit |
-| Sensor Range Fan *WISMAR* | `10032500002422000000` | `fan`, 1–12 km, 300°–030° | The sector the sweep-centre radar watches, over the water |
-| Defended Area *NORD*, hostile | `10062500002002010000` | `ellipse`, centre + one point per axis | Offshore to the north-east — the overlay's one red graphic |
+| Sensor Range Fan *POEL* | `10032500002422000000` | `fan`, 1–20 km, 300°–030° | The sector a radar on the north shore of Poel watches, out over the sweep |
+| Defended Area *NORD*, hostile | `10062500002002010000` | `ellipse`, centre + one point per axis | Open water north of Rerik — the overlay's one red graphic |
 
 Three things are deliberate. The names are bare designations — `HANSE`,
 not `PL HANSE` — because the standard's renderer prints the graphic's
@@ -101,10 +103,10 @@ seeded forces are picked to make the difference visible:
 
 | Callsign | Type | Where it gets its position |
 |---|---|---|
-| `Nordstern` | leader | Static. A command post that drifts is a bug. |
-| `Gecko 21` | vehicle, `own_blue_force` | This host's own pose — the same value `OwnPose` reports. |
-| `Kiebitz 1` | unmanned, `mount_host = Gecko 21` | None of its own: mounted means *exactly where the host is*. |
-| `Möwe 3` | leader | A leg at 1.4 m/s — the slowest thing on the map. |
+| `Nordstern` | leader — infantry platoon HQ | Static. A command post that drifts is a bug. |
+| `Gecko 21` | vehicle — utility vehicle, `own_blue_force` | This host's own pose — the same value `OwnPose` reports. |
+| `Kiebitz 1` | unmanned — reconnaissance UAV, `mount_host = Gecko 21` | None of its own: mounted means *exactly where the host is*. |
+| `Möwe 3` | leader — infantry section | A leg at 1.4 m/s — the slowest thing on the map. |
 
 ## Writing to it
 
@@ -130,7 +132,7 @@ fields are in [the protocol page](../../docs/protocol.md#writing-to-tacticalapi)
           "reportingTime": "2026-09-13T10:15:00Z",
           "name": { "content": "Fähre Holnis" },
           "symbolIdentifier": {
-            "content": { "symbolCatalog": "SYMBOL_CATALOG_MIL2525_C", "stringIdentifier": "SNSP------*****" }
+            "content": { "symbolCatalog": "SYMBOL_CATALOG_MIL2525_C", "stringIdentifier": "SNSPXMP---*****" }
           },
           "location": {
             "content": {
