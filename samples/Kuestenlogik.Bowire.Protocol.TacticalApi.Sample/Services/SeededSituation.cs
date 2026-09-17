@@ -27,7 +27,13 @@ namespace Kuestenlogik.Bowire.Protocol.TacticalApi.Sample.Services;
 /// So the groups are deliberately unlike each other. They sit in
 /// different places, move at different speeds, take different shapes on
 /// the map (a circle, straight legs, two lines converging), and carry
-/// three different affinities. A bug that merges two tracks, or colours
+/// three different affinities. Each carries a code with a function id
+/// the symbol renderer has an icon for — a frigate is drawn as one, a
+/// tank as one — and sits where such a thing can be: the ships on the
+/// water of the Mecklenburg Bight, the vehicles on the roads of
+/// Holstein and Mecklenburg. A generic frame on a circle told the
+/// operator only whose it was; a destroyer parked on a field told them
+/// the sample was not looking. A bug that merges two tracks, or colours
 /// by message type instead of by entity, or drops the second half of a
 /// multi-entity frame, shows up here as something visibly wrong rather
 /// than as a plausible picture.
@@ -48,9 +54,15 @@ namespace Kuestenlogik.Bowire.Protocol.TacticalApi.Sample.Services;
 /// </remarks>
 internal static class SeededSituation
 {
-    /// <summary>Radar centre (lat / lon) — origin of the RadarSweep rotation.</summary>
-    public const double CentreLatitude = 54.00;
-    public const double CentreLongitude = 11.50;
+    /// <summary>
+    /// Centre (lat / lon) of the RadarSweep rotation: open water in the
+    /// Mecklenburg Bight, north of Poel. The 6.6 km circle around it
+    /// stays clear of Poel, the Wustrow peninsula and the Boltenhagen
+    /// shore — the earlier centre in Wismar Bay ran the ships across the
+    /// island.
+    /// </summary>
+    public const double CentreLatitude = 54.16;
+    public const double CentreLongitude = 11.38;
 
     /// <summary>RadarSweep track radius, in metres (~6 km).</summary>
     public const double RadiusMetres = 6_600.0;
@@ -81,39 +93,46 @@ internal static class SeededSituation
         }
 
         // --- RadarSweep: the original three, 120° apart on one circle ---
-        Add("5a4a5147-9c5d-4c1e-9e9e-2b48d4a35b1a", "SFSP------*****",
-            "Patrol Möwe (friendly)",
+        // Sea-surface codes with a function id each: patrol craft
+        // (CPSB), destroyer (CLDD), general cargo (XMC).
+        Add("5a4a5147-9c5d-4c1e-9e9e-2b48d4a35b1a", "SFSPCPSB--*****",
+            "Patrol boat Möwe (friendly)",
             new OrbitMotion(CentreLatitude, CentreLongitude, RadiusMetres, 0, SweepDegreesPerSecond));
-        Add("f5b3e2a6-9d27-4d4f-93c9-1e7b9f4d0c52", "SHSP------*****",
-            "Surface Contact (hostile)",
+        Add("f5b3e2a6-9d27-4d4f-93c9-1e7b9f4d0c52", "SHSPCLDD--*****",
+            "Destroyer Rurik (hostile)",
             new OrbitMotion(CentreLatitude, CentreLongitude, RadiusMetres, 120, SweepDegreesPerSecond));
-        Add("9d1f2e0b-c2d4-4a31-89e0-1aef8a8e6021", "SNSP------*****",
+        Add("9d1f2e0b-c2d4-4a31-89e0-1aef8a8e6021", "SNSPXMC---*****",
             "Cargo Hanse (neutral)",
             new OrbitMotion(CentreLatitude, CentreLongitude, RadiusMetres, 240, SweepDegreesPerSecond));
 
         // --- Convoy Alpha: three vehicles nose-to-tail heading east ---
         // Inland and well clear of the sweep circle, so the two groups
-        // never overlap on screen.
+        // never overlap on screen. Armoured personnel carriers (EVAA):
+        // equipment, not a unit — three vehicles are three symbols.
         for (var i = 0; i < 3; i++)
         {
-            Add($"c0a1{i:d2}00-1111-4a11-9a11-aaaaaaaa00{i:d2}", "SFGPUCV---*****",
-                $"Convoy Alpha {i + 1} (friendly)",
+            Add($"c0a1{i:d2}00-1111-4a11-9a11-aaaaaaaa00{i:d2}", "SFGPEVAA--*****",
+                $"Convoy Alpha {i + 1} (APC)",
                 new LegMotion(54.09, 10.20, BearingDegrees: 90, MetresPerSecond: 11.0,
                               HeadStartMetres: i * 60.0));
         }
 
         // --- Convoy Bravo: two trucks heading south, a different bearing ---
+        // Semi-trailer trucks (EVUS) — the military utility branch, not
+        // the civilian one (EVC…), which the standard paints purple.
         for (var i = 0; i < 2; i++)
         {
-            Add($"c0b2{i:d2}00-2222-4b22-9b22-bbbbbbbb00{i:d2}", "SFGPUCT---*****",
-                $"Convoy Bravo {i + 1} (friendly)",
+            Add($"c0b2{i:d2}00-2222-4b22-9b22-bbbbbbbb00{i:d2}", "SFGPEVUS--*****",
+                $"Convoy Bravo {i + 1} (truck)",
                 new LegMotion(53.86, 11.05, BearingDegrees: 180, MetresPerSecond: 16.0,
                               HeadStartMetres: i * 80.0));
         }
 
-        // --- Kite: a UAV orbiting the Bay of Lübeck, faster and tighter ---
+        // --- Kite: a UAV orbiting off Poel, faster and tighter ---
         // A second circle at a different centre, radius and rate, so a
-        // grouping that keys on "looks like a circle" cannot pass.
+        // grouping that keys on "looks like a circle" cannot pass. Over
+        // the shore of Poel and the water beyond it — an aircraft is the
+        // one thing here that may sit over either.
         Add("d40e0000-3333-4c33-9c33-cccccccc0001", "SFAPMFQ---*****",
             "UAV Kite 07 (friendly)",
             new OrbitMotion(54.02, 11.50, RadiusMetres: 2_500.0,
@@ -122,15 +141,16 @@ internal static class SeededSituation
         // --- Engagement: two pairs closing head-on across open ground ---
         // The only hostile ground tracks in the scenario. Their legs run
         // towards each other, so the trajectories cross — which is where
-        // a grouping bug stops being subtle.
+        // a grouping bug stops being subtle. Medium tanks (EVATM) on both
+        // sides, on the fields east of Plön.
         for (var i = 0; i < 2; i++)
         {
-            Add($"e1b1{i:d2}00-4444-4d44-9d44-dddddddd00{i:d2}", "SFGPUCA---*****",
-                $"Blau {i + 1} (friendly)",
+            Add($"e1b1{i:d2}00-4444-4d44-9d44-dddddddd00{i:d2}", "SFGPEVATM-*****",
+                $"Blau {i + 1} (tank)",
                 new LegMotion(54.30, 10.75, BearingDegrees: 135, MetresPerSecond: 9.0,
                               HeadStartMetres: i * 90.0));
-            Add($"e1r1{i:d2}00-5555-4e55-9e55-eeeeeeee00{i:d2}", "SHGPUCA---*****",
-                $"Rot {i + 1} (hostile)",
+            Add($"e1r1{i:d2}00-5555-4e55-9e55-eeeeeeee00{i:d2}", "SHGPEVATM-*****",
+                $"Rot {i + 1} (tank)",
                 new LegMotion(54.24, 10.83, BearingDegrees: 315, MetresPerSecond: 9.0,
                               HeadStartMetres: i * 90.0));
         }

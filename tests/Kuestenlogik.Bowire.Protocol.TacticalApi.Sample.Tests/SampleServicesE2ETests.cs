@@ -36,7 +36,7 @@ public sealed class SampleServicesE2ETests : IClassFixture<InProcessSampleServer
         var after = await Invoke("Situation", "GetSituationObjects", "{}", ct);
         Assert.Contains("Fähre Holnis", after.Response, StringComparison.Ordinal);
         Assert.Contains("54.86", after.Response, StringComparison.Ordinal);
-        Assert.Contains("SNSP------*****", after.Response, StringComparison.Ordinal);
+        Assert.Contains("SNSPXMP---*****", after.Response, StringComparison.Ordinal);
 
         // Only the name. The location and the symbol identifier were not
         // sent, so they are not touched — "omit the entire property".
@@ -59,7 +59,7 @@ public sealed class SampleServicesE2ETests : IClassFixture<InProcessSampleServer
         var read = await Invoke("Situation", "GetSituationObjects", "{}", ct);
         Assert.Contains("Fähre Holnis II", read.Response, StringComparison.Ordinal);
         Assert.Contains("54.86", read.Response, StringComparison.Ordinal);
-        Assert.Contains("SNSP------*****", read.Response, StringComparison.Ordinal);
+        Assert.Contains("SNSPXMP---*****", read.Response, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -310,7 +310,7 @@ public sealed class SampleServicesE2ETests : IClassFixture<InProcessSampleServer
                 "reportingTime": "2026-09-13T10:15:00Z",
                 "name": { "content": "Fähre Holnis" },
                 "symbolIdentifier": {
-                  "content": { "symbolCatalog": "SYMBOL_CATALOG_MIL2525_C", "stringIdentifier": "SNSP------*****" }
+                  "content": { "symbolCatalog": "SYMBOL_CATALOG_MIL2525_C", "stringIdentifier": "SNSPXMP---*****" }
                 },
                 "location": {
                   "content": {
