@@ -11,7 +11,7 @@ namespace Kuestenlogik.Bowire.Protocol.TacticalApi.Sample.Services;
 /// <summary>
 /// The upstream <c>Situation</c> service. Thirteen tracks in five groups
 /// (see <see cref="SeededSituation"/>) move under their own motion
-/// models, seven control measures (see <see cref="SeededOverlay"/>) lie
+/// models, eight control measures (see <see cref="SeededOverlay"/>) lie
 /// still over them, and all of it is broadcast as a fresh snapshot on
 /// every exercise tick to every active subscriber — and the operator can
 /// add, change and delete symbols beside them.

@@ -1,7 +1,7 @@
 # Kuestenlogik.Bowire.Protocol.TacticalApi.Sample
 
 The canonical TacticalAPI demo — **thirteen MIL-2525C tracks in five
-groups** under **seven 2525D control measures**, **four blue forces**, and
+groups** under **eight control measures**, **four blue forces**, and
 **this host's own pose**, across the western Baltic and the
 Schleswig-Holstein coast, broadcast every two seconds — combined so it demonstrates **both** ways Bowire meets a
 TacticalAPI server, from one project:
@@ -21,7 +21,7 @@ All three upstream services are served:
 
 | Service | What it does here |
 |---|---|
-| `Situation` | Read **and write**. The thirteen tracks and the seven control measures, as one snapshot per frame — and symbols the operator adds, changes and deletes beside them. |
+| `Situation` | Read **and write**. The thirteen tracks and the eight control measures, as one snapshot per frame — and symbols the operator adds, changes and deletes beside them. |
 | `OwnPose` | Read **and write**. Where this host is, and a way to tell it otherwise. |
 | `BlueForceTracking` | Read **and write**. Friendly participants that report themselves, with keep-alive expiry. |
 
@@ -34,7 +34,7 @@ All three upstream services are served:
 | **Convoy Bravo** | 2 friendly | South at 16 m/s, 80 m apart |
 | **UAV Kite** | 1 friendly | Orbiting the Bay of Lübeck, 2.5 km radius, a rotation every 90 s |
 | **Engagement** | 2 friendly + 2 hostile | Two pairs closing head-on, so the trajectories cross |
-| **Overlay** | 7 control measures (6 friendly + 1 hostile) | Static. The lines, areas, arrow, corridor, sector and ellipse the tracks operate under — see below |
+| **Overlay** | 8 control measures (7 friendly + 1 hostile) | Static. The lines, areas, arrow, corridor, sector and ellipse the tracks operate under — see below |
 | **Blue forces** | 4 friendly, on `BlueForceTracking` | A static command post, this host's own vehicle, a UAV mounted on it, and a dismounted section at walking pace |
 
 The groups are deliberately unlike each other — different places, speeds,
@@ -66,6 +66,7 @@ time can see which one it has not reached yet:
 |---|---|---|---|
 | Boundary *ALPHA*, battalion | `10032500161101000000` | `line`, 4 points | North–south between the convoys' ground and the engagement |
 | Phase Line *HANSE* | `10032500001403000000` | `line`, 4 points | East–west across the engagement's line of advance |
+| Phase Line *OSTSEE* | `GFGPGLP-------X` (2525C) | `line`, 3 points | South of the engagement — the one graphic in the fifteen-letter form |
 | Assembly Area *BUCHE* | `10032500001502000000` | `polygon`, 5 points | Around Convoy Alpha's origin |
 | Axis of Advance, main attack *BLAU* | `10032500001514030000` | `multipoint`, tip first, 3 centreline points + 1 width point | Blau's attack, south-east onto Rot |
 | Air Corridor *KITE* | `10032500001701000000` | `corridor`, 3 points, 2 000 m wide | From the coast out to the UAV's orbit |
@@ -81,7 +82,10 @@ numeric form** — `symbolIdentifier.content.numericIdentifier` with
 `SYMBOL_CATALOG_MIL2525_D` — where the tracks use fifteen-letter 2525C
 strings, so the numeric path a real producer sends is exercised too; a
 consumer reassembles the code by formatting each half with ten digits.
-And **nothing in the overlay moves**: control measures are planned, not
+One graphic, phase line *OSTSEE*, is the exception on purpose: it
+carries the 2525C string a producer that still speaks C would send, so a
+consumer whose renderer only knows D has something to translate. And
+**nothing in the overlay moves**: control measures are planned, not
 observed, and they carry no motion for the tick to apply.
 
 `routeLocation` and `sketchLocation` are left out on purpose — a route is
