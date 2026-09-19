@@ -174,12 +174,124 @@ fields are in [the protocol page](../../docs/protocol.md#writing-to-tacticalapi)
   `"organizationUnit"` or any of the other object types in place of
   `"symbol"` &mdash; the same envelope, the type's own properties &mdash; and
   the same rules apply: sparse updates, the three required fields, expiry,
-  delete. A route wants a `location` with `routeLocation.wayPoints`; an
-  `overlayDocument` carries whole objects inside `overlayData.contents`,
-  each of which is written like a top-level one. What the server refuses on
-  top: changing an object's type &mdash; an identity that is a symbol stays
-  a symbol, and an update sent as a route is turned down with "is a symbol,
-  not a route".
+  delete. What the server refuses on top: changing an object's type &mdash;
+  an identity that is a symbol stays a symbol, and an update sent as a
+  route is turned down with "is a symbol, not a route".
+
+  The three types whose shape is not obvious from the symbol's, ready to
+  paste. Every property is a wrapper with `content` (or `contents` for a
+  list), and enums travel under their full proto names:
+
+  A **route** puts its geometry where a symbol puts its point &mdash; in
+  `location`, as `routeLocation` with waypoints &mdash; and carries how to
+  draw it:
+
+  ```json
+  {
+    "situationObjects": [
+      {
+        "route": {
+          "identity": { "stringIdentity": "route-holnis" },
+          "reporter": { "stringIdentity": "TacticalAPI" },
+          "reportingTime": "2026-09-19T10:00:00Z",
+          "name": { "content": "Anmarschweg Holnis" },
+          "routeType": { "content": "ROUTE_TYPE_ADVISORY_ROUTE" },
+          "marchSpeed": { "content": 12 },
+          "lineStyle": { "content": "LINE_STYLE_SOLID" },
+          "lineColor": { "content": { "red": 0, "green": 90, "blue": 200 } },
+          "location": {
+            "content": {
+              "routeLocation": {
+                "wayPoints": [
+                  { "latitudeCoordinate": 54.80, "longitudeCoordinate": 9.55 },
+                  { "latitudeCoordinate": 54.84, "longitudeCoordinate": 9.57 },
+                  { "latitudeCoordinate": 54.86, "longitudeCoordinate": 9.58 }
+                ]
+              }
+            }
+          }
+        }
+      }
+    ]
+  }
+  ```
+
+  An **action task** has no geometry of its own to speak of; what it has
+  is state, a completion, and references to other objects &mdash; a list of
+  identities under `contents`:
+
+  ```json
+  {
+    "situationObjects": [
+      {
+        "actionTask": {
+          "identity": { "stringIdentity": "task-secure-pier" },
+          "reporter": { "stringIdentity": "TacticalAPI" },
+          "reportingTime": "2026-09-19T10:00:00Z",
+          "name": { "content": "Pier sichern" },
+          "actionTaskType": { "content": "ACTION_TASK_TYPE_ATTACK" },
+          "actionTaskStatus": { "content": "ACTION_TASK_STATUS_TYPE_ABORTED" },
+          "completionRatio": { "content": 40 },
+          "plannedStartTime": { "content": "2026-09-19T11:00:00Z" },
+          "actionTaskResources": {
+            "contents": [ { "stringIdentity": "BF-GECKO-21" }, { "stringIdentity": "BF-MOEWE-3" } ]
+          }
+        }
+      }
+    ]
+  }
+  ```
+
+  An **overlay document** carries whole objects inside `overlayData.contents`
+  &mdash; each written exactly like a top-level one, envelope included, and
+  served back as the object it describes:
+
+  ```json
+  {
+    "situationObjects": [
+      {
+        "overlayDocument": {
+          "identity": { "stringIdentity": "overlay-phase-2" },
+          "reporter": { "stringIdentity": "TacticalAPI" },
+          "reportingTime": "2026-09-19T10:00:00Z",
+          "name": { "content": "Phase 2" },
+          "tag": { "content": "phase-2" },
+          "messageCategory": { "content": "MESSAGE_CATEGORY_TYPE_NORMAL" },
+          "overlayData": {
+            "contents": [
+              {
+                "symbol": {
+                  "identity": { "stringIdentity": "phase-2-objective" },
+                  "reporter": { "stringIdentity": "TacticalAPI" },
+                  "reportingTime": "2026-09-19T10:00:00Z",
+                  "name": { "content": "Ziel Bravo" },
+                  "location": {
+                    "content": {
+                      "point": {
+                        "locationTime": "2026-09-19T10:00:00Z",
+                        "geoPoint": { "latitudeCoordinate": 54.83, "longitudeCoordinate": 9.60 }
+                      }
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    ]
+  }
+  ```
+
+  The remaining types follow the same pattern with their own properties:
+  `actionEvent` (`actionEventType`, `threatLevel`), `organizationUnit`
+  (`unitDesignation`, `organizationUnitColor`, `subordinatedOrganizationUnitCollection`),
+  and the documents &mdash; `textDocument` (`content`, `plainContent`),
+  `pictureDocument` and `voiceMessageDocument` (bytes as base64 under
+  `content`, a MIME type under `type`), `natoMessageDocument`
+  (`mtfMessageData`), `sketchDocument` (a `location` with a `line`). The
+  sample's test project writes each of the eleven with one property of
+  its own shape, so the bodies there are a second place to copy from.
 
 - **One write moves three things.** Call `OwnPose` → `UpdatePosition`
   with a coordinate &mdash; the envelope the contract expects, not just the

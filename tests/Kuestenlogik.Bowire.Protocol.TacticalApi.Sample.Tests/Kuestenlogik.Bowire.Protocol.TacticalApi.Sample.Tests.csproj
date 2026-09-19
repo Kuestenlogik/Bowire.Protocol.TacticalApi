@@ -24,4 +24,9 @@
          brings along. -->
     <ProjectReference Include="..\..\samples\Kuestenlogik.Bowire.Protocol.TacticalApi.Sample\Kuestenlogik.Bowire.Protocol.TacticalApi.Sample.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- The sample README, so ReadmeBodiesE2ETests sends every json block
+         in it as it stands — the file in the repository, not a copy. -->
+    <None Include="..\..\samples\Kuestenlogik.Bowire.Protocol.TacticalApi.Sample\README.md" Link="SampleReadme.md" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>
