@@ -21,7 +21,7 @@ All three upstream services are served:
 
 | Service | What it does here |
 |---|---|
-| `Situation` | Read **and write**. The thirteen tracks and the eight control measures, as one snapshot per frame — and symbols the operator adds, changes and deletes beside them. |
+| `Situation` | Read **and write**. The thirteen tracks and the eight control measures, as one snapshot per frame — and whatever the operator adds, changes and deletes beside them, of any of the eleven object types. |
 | `OwnPose` | Read **and write**. Where this host is, and a way to tell it otherwise. |
 | `BlueForceTracking` | Read **and write**. Friendly participants that report themselves, with keep-alive expiry. |
 
@@ -169,6 +169,17 @@ fields are in [the protocol page](../../docs/protocol.md#writing-to-tacticalapi)
   itself: the contract says expired symbols are marked deleted
   automatically, and the next tick after the time passes does exactly what
   a delete does, with `Sample.Expiry` as the reporter.
+
+  None of that is symbol-specific. Put `"route"`, `"actionTask"`,
+  `"organizationUnit"` or any of the other object types in place of
+  `"symbol"` &mdash; the same envelope, the type's own properties &mdash; and
+  the same rules apply: sparse updates, the three required fields, expiry,
+  delete. A route wants a `location` with `routeLocation.wayPoints`; an
+  `overlayDocument` carries whole objects inside `overlayData.contents`,
+  each of which is written like a top-level one. What the server refuses on
+  top: changing an object's type &mdash; an identity that is a symbol stays
+  a symbol, and an update sent as a route is turned down with "is a symbol,
+  not a route".
 
 - **One write moves three things.** Call `OwnPose` → `UpdatePosition`
   with a coordinate &mdash; the envelope the contract expects, not just the
