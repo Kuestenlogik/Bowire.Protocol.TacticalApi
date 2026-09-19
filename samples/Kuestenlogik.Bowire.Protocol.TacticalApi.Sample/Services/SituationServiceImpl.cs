@@ -1,6 +1,7 @@
 // Copyright 2026 Küstenlogik
 // SPDX-License-Identifier: Apache-2.0
 
+using Google.Protobuf;
 using Google.Protobuf.Collections;
 using Google.Protobuf.WellKnownTypes;
 using Grpc.Core;
@@ -39,11 +40,13 @@ namespace Kuestenlogik.Bowire.Protocol.TacticalApi.Sample.Services;
 /// on the day it counts.
 /// </para>
 /// <para>
-/// Symbols only. The <c>UpdateSituationObject</c> oneof carries eleven
-/// object types, and a sample that maps all of them is a second
-/// implementation of TacNet; one that maps the type the upstream
-/// reference client writes is enough to show the shape. The other ten
-/// are refused with a message that says so.
+/// All eleven object types in the <c>UpdateSituationObject</c> oneof are
+/// written the same way — symbols, action tasks and events, routes,
+/// organisation units, the six document kinds. Not through eleven copies
+/// of the same code: the contract's update and served messages are mirror
+/// images, and <see cref="SituationObjectMapper"/> walks that mirror once,
+/// by protobuf reflection. What an update means — sparse, only the
+/// properties sent — is the same for every type.
 /// </para>
 /// <para>
 /// <c>expiry_time</c> is honoured: "Expired symbols are automatically
@@ -184,14 +187,14 @@ internal sealed class SituationServiceImpl : Situation.SituationBase, IScenarioT
         {
             foreach (var (key, obj) in _objects)
             {
-                if (obj.Symbol?.ExpiryTime?.Content is not { } expiry) continue;
+                if (SituationObjectMapper.ExpiryOf(obj) is not { } expiry) continue;
                 if (expiry.ToDateTime() > nowUtc) continue;
                 retired.Add(obj);
                 _motions.Remove(key);
             }
             foreach (var gone in retired)
             {
-                _objects.Remove(IdentityKeys.Of(gone.Symbol.Identity));
+                _objects.Remove(IdentityKeys.Of(SituationObjectMapper.IdentityOf(gone)));
                 gone.IsDeleted = new DataPropertyBool
                 {
                     CreationMetaData = new CreationMetaData
@@ -217,69 +220,61 @@ internal sealed class SituationServiceImpl : Situation.SituationBase, IScenarioT
     /// <returns>The refusal to send, or <c>null</c> when every update landed.</returns>
     private string? TryAddOrUpdate(RepeatedField<UpdateSituationObject> requested)
     {
-        var updates = new List<UpdateSymbol>(requested.Count);
+        var updates = new List<(string CaseName, IMessage Payload, SituationObjectMapper.Envelope Envelope)>(requested.Count);
         for (var i = 0; i < requested.Count; i++)
         {
-            var update = requested[i];
             var at = $"situation_objects[{i}]";
 
             // "Note: only one of the situation object types is supported at
             // a time!" — protobuf already guarantees at most one; none at
             // all is the case a hand-written request produces.
-            if (update.TypeCase == UpdateSituationObject.TypeOneofCase.None)
-                return $"{at}: set exactly one of the situation object types (symbol, action_task, …).";
-            if (update.TypeCase != UpdateSituationObject.TypeOneofCase.Symbol)
-                return $"{at}: this sample keeps symbols only — '{update.TypeCase}' is not served here.";
+            if (SituationObjectMapper.Unwrap(requested[i]) is not var (caseName, payload))
+                return $"{at}: set exactly one of the situation object types (symbol, action_task, route, organization_unit, …).";
 
-            var symbol = update.Symbol;
-            if (CheckEnvelope(at, symbol.Identity, symbol.Reporter, symbol.ReportingTime) is { } incomplete)
+            var envelope = SituationObjectMapper.EnvelopeOf(payload);
+            if (CheckEnvelope(at, envelope.Identity, envelope.Reporter, envelope.ReportingTime) is { } incomplete)
                 return incomplete;
-            updates.Add(symbol);
+            updates.Add((caseName, payload, envelope));
         }
 
         lock (_gate)
         {
             // The identity checks need the store, so they run under the lock
             // — still before the first property is written.
-            foreach (var update in updates)
+            foreach (var (caseName, _, envelope) in updates)
             {
-                var key = IdentityKeys.Of(update.Identity);
+                var key = IdentityKeys.Of(envelope.Identity);
                 if (_objects.TryGetValue(key, out var existing))
                 {
-                    if (existing.Symbol is null)
-                        return $"{Describe(update.Identity)} is not a symbol — the contract allows one type per object.";
+                    // One type per object, for its whole life: a symbol does
+                    // not become a route by being updated as one.
+                    if (SituationObjectMapper.CaseName(existing) is { } existingCase && existingCase != caseName)
+                        return $"{Describe(envelope.Identity)} is a {existingCase}, not a {caseName} — the contract allows one type per object.";
                 }
-                else if (IdentityKeys.IsInternalOnly(update.Identity))
+                else if (IdentityKeys.IsInternalOnly(envelope.Identity))
                 {
                     // types.proto: the int32 / int64 identities are "not for
                     // external use to create new objects".
-                    return $"No situation object with identity {Describe(update.Identity)}, and an int32 / int64 identity cannot create one — use a uuid_identity or string_identity.";
+                    return $"No situation object with identity {Describe(envelope.Identity)}, and an int32 / int64 identity cannot create one — use a uuid_identity or string_identity.";
                 }
             }
 
-            foreach (var update in updates)
+            foreach (var (caseName, payload, envelope) in updates)
             {
-                var key = IdentityKeys.Of(update.Identity);
+                var key = IdentityKeys.Of(envelope.Identity);
                 if (!_objects.TryGetValue(key, out var target))
                 {
-                    target = new SituationObject
-                    {
-                        Symbol = new Symbol
-                        {
-                            Identity = update.Identity,
-                            CreationMetaData = MetaOf(update),
-                        },
-                    };
+                    target = SituationObjectMapper.CreateServed(caseName, payload);
                     _objects[key] = target;
                 }
 
-                ApplySparse(target.Symbol, update);
+                SituationObjectMapper.ApplySparse(target, payload);
 
                 // An operator who places a seeded track somewhere else has
                 // taken it over, the same way an own-pose fix takes over
                 // from dead reckoning. Leaving the motion in place would
                 // move the symbol straight back on the next tick.
-                if (update.Location is not null) _motions.Remove(key);
+                if (SituationObjectMapper.Sets(payload, "location")) _motions.Remove(key);
             }
         }
 
@@ -348,65 +343,6 @@ internal sealed class SituationServiceImpl : Situation.SituationBase, IScenarioT
             return $"{at}: reporting_time is required — the UTC time of the change.";
         return null;
     }
-
-    /// <summary>
-    /// Copy the properties the update carries onto the symbol, and only
-    /// those. <c>situation_object_updates.proto</c>: "If the value should
-    /// not be changed, then omit the entire property." A property sent
-    /// with no content clears the value — the served property keeps its
-    /// creation metadata and loses its content, which is what a null
-    /// looks like on the read side.
-    /// </summary>
-    private static void ApplySparse(Symbol symbol, UpdateSymbol update)
-    {
-        var meta = MetaOf(update);
-
-        if (update.Name is { } name)
-            symbol.Name = new DataPropertyString { CreationMetaData = meta, Content = name.Content };
-        if (update.AdditionalInformation is { } info)
-            symbol.AdditionalInformation = new DataPropertyString { CreationMetaData = meta, Content = info.Content };
-        if (update.SymbolIdentifier is { } sid)
-            symbol.SymbolIdentifier = new DataPropertySymbolIdentifier { CreationMetaData = meta, Content = sid.Content };
-        if (update.Location is { } location)
-            symbol.Location = new DataPropertyLocation { CreationMetaData = meta, Content = location.Content };
-        if (update.ExpiryTime is { } expiry)
-            symbol.ExpiryTime = new DataPropertyTimestamp { CreationMetaData = meta, Content = expiry.Content };
-        if (update.StartTime is { } start)
-            symbol.StartTime = new DataPropertyTimestamp { CreationMetaData = meta, Content = start.Content };
-        if (update.EndTime is { } end)
-            symbol.EndTime = new DataPropertyTimestamp { CreationMetaData = meta, Content = end.Content };
-        if (update.HigherFormation is { } formation)
-            symbol.HigherFormation = new DataPropertyString { CreationMetaData = meta, Content = formation.Content };
-        if (update.Reinforcement is { } reinforcement)
-            symbol.Reinforcement = new DataPropertyReinforcement { CreationMetaData = meta, Content = reinforcement.Content };
-        if (update.EquipmentType is { } equipment)
-            symbol.EquipmentType = new DataPropertyString { CreationMetaData = meta, Content = equipment.Content };
-        if (update.Quantity is { } quantity)
-            symbol.Quantity = new DataPropertyInt { CreationMetaData = meta, Content = quantity.Content };
-        if (update.StaffComment is { } comment)
-            symbol.StaffComment = new DataPropertyString { CreationMetaData = meta, Content = comment.Content };
-        if (update.Dimension is { } dimension)
-            symbol.Dimension = new DataPropertyDimension { CreationMetaData = meta, X = dimension.X, Y = dimension.Y, Z = dimension.Z };
-        if (update.ForeignKey is { } foreignKey)
-        {
-            // The update carries one key with its source; the object keeps
-            // a dictionary of them, keyed by that source.
-            symbol.ForeignKeys[foreignKey.Source ?? "TacticalAPI"] = new DataPropertyIdentity
-            {
-                CreationMetaData = meta,
-                Content = foreignKey.Content,
-                Source = foreignKey.Source,
-            };
-        }
-    }
-
-    /// <summary>
-    /// The reporter and reporting time of a write, as the read side
-    /// carries them: on every property the write touched, and on the
-    /// object itself when the write created it.
-    /// </summary>
-    private static CreationMetaData MetaOf(UpdateSymbol update) =>
-        new() { CreationTime = update.ReportingTime, CreatorIdentity = update.Reporter };
 
     private static string Describe(Identity? identity) =>
         identity?.TypeCase switch
