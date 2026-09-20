@@ -27,6 +27,7 @@
          server (AddGrpc + MapGrpcService). Version from central PM. -->
     <PackageReference Include="Grpc.AspNetCore" />
     <PackageReference Include="Grpc.AspNetCore.Web" />
+    <PackageReference Include="Grpc.Tools" />
   </ItemGroup>
 
   <ItemGroup>
