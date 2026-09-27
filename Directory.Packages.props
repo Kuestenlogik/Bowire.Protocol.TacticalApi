@@ -11,7 +11,7 @@
          C# bindings from the .proto files that the build target
          downloads into obj/tacticalapi-protos/. Google.Protobuf
          is the runtime serializer the generated code calls into. -->
-    <PackageVersion Include="Grpc.Net.Client" Version="2.83.0" />
+    <PackageVersion Include="Grpc.Net.Client" Version="2.84.0" />
     <!-- gRPC-Web: Rheinmetall's TacNet exposes it on its own port (4268) and
          their reference client defaults to it, because it is what survives
          proxies that will not carry h2c (#67). -->
