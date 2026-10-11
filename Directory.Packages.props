@@ -25,7 +25,7 @@
 
     <!-- Test-only -->
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.10.1" />
-    <PackageVersion Include="xunit.v3" Version="4.0.1" />
+    <PackageVersion Include="xunit.v3" Version="4.0.2" />
     <!-- XPlat coverage collector — drives the dotnet test coverage
          collection flag and drops one cobertura.xml per test project
          for CI / Codecov upload. -->
