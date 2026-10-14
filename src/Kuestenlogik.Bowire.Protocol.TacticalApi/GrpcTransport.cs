@@ -368,7 +368,15 @@ internal static class GrpcTransport
 /// </summary>
 public sealed class TransportConfigurationException : Exception
 {
+    /// <summary>A configuration error without further detail.</summary>
     public TransportConfigurationException() { }
+
+    /// <summary>A configuration error, described for the operator.</summary>
+    /// <param name="message">What is wrong with the configuration.</param>
     public TransportConfigurationException(string message) : base(message) { }
+
+    /// <summary>A configuration error caused by another failure (e.g. a PEM that does not load).</summary>
+    /// <param name="message">What is wrong with the configuration.</param>
+    /// <param name="innerException">The failure that revealed it.</param>
     public TransportConfigurationException(string message, Exception innerException) : base(message, innerException) { }
 }

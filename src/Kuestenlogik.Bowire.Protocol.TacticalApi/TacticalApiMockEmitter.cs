@@ -94,9 +94,12 @@ public sealed class TacticalApiMockEmitter : IBowireMockEmitter
         _cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         _schedulerTask = Task.Run(() => RunAsync(steps, options, logger, _cts.Token), _cts.Token);
 
-        logger.LogInformation(
-            "tacticalapi-emitter replaying → {Address} (steps={Count})",
-            address, steps.Count);
+        if (logger.IsEnabled(LogLevel.Information))
+        {
+            logger.LogInformation(
+                "tacticalapi-emitter replaying → {Address} (steps={Count})",
+                address, steps.Count);
+        }
         return Task.CompletedTask;
     }
 
@@ -206,9 +209,12 @@ public sealed class TacticalApiMockEmitter : IBowireMockEmitter
                     }
                 }
                 sw.Stop();
-                logger.LogInformation(
-                    "tacticalapi-emit(step={StepId}, {Service}/{Method}, frames={Frames}, durationMs={Ms})",
-                    step.Id, serviceDesc.FullName, methodDesc.Name, frames, sw.ElapsedMilliseconds);
+                if (logger.IsEnabled(LogLevel.Information))
+                {
+                    logger.LogInformation(
+                        "tacticalapi-emit(step={StepId}, {Service}/{Method}, frames={Frames}, durationMs={Ms})",
+                        step.Id, serviceDesc.FullName, methodDesc.Name, frames, sw.ElapsedMilliseconds);
+                }
             }
             else
             {
@@ -229,9 +235,12 @@ public sealed class TacticalApiMockEmitter : IBowireMockEmitter
                     return;
                 }
 
-                logger.LogInformation(
-                    "tacticalapi-emit(step={StepId}, {Service}/{Method}, durationMs={Ms})",
-                    step.Id, serviceDesc.FullName, methodDesc.Name, sw.ElapsedMilliseconds);
+                if (logger.IsEnabled(LogLevel.Information))
+                {
+                    logger.LogInformation(
+                        "tacticalapi-emit(step={StepId}, {Service}/{Method}, durationMs={Ms})",
+                        step.Id, serviceDesc.FullName, methodDesc.Name, sw.ElapsedMilliseconds);
+                }
             }
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
